@@ -239,6 +239,113 @@ else
   echo "allow-sudo tests skipped (needs root)"
 fi
 
+echo "env hand-over to the deploy user"
+check "set variables are passed"       bash -c 'source "'"$ROOT"'/lib/common.sh"; NAME=x REPO_URL="a b"; unset PORT; _collect_deploy_env; printf "%s\n" "${DEPLOY_ENV[@]}" | grep -qx "REPO_URL=a b" && ! printf "%s\n" "${DEPLOY_ENV[@]}" | grep -q "^PORT="'
+
+echo "add flags"
+"$B/autodeploy" add --name flagged --repo "$T/repo.git" --type static --build none --install none --notify telegram --yes >/dev/null 2>&1
+check "flags fill the project file"    grep -q "^APP_TYPE='static'" "$AUTODEPLOY_HOME/projects/flagged.env"
+check "unknown flag refused"           bash -c '! "'"$B"'/autodeploy" add --nope x >/dev/null 2>&1'
+
+if [ "$(id -u)" = 0 ]; then
+  echo "API tokens and connect (root)"
+  export AUTODEPLOY_TOKENS_DIR="$T/tokens" API_LOG="$T/api.log" API_STATE="$T/api-state" CONNECT_RETRIES=1
+  mkdir -p "$T/apistub" "$API_STATE"
+  cat > "$T/apistub/curl" <<'EOF'
+#!/usr/bin/env bash
+method=GET; data=""; url=""; auth=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -X) method="$2"; shift 2 ;;
+    --data-binary) data="$2"; shift 2 ;;
+    -K) auth="$(cat "$2")"; shift 2 ;;
+    -H|-m|-w) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+printf '%s %s %s\n' "$method" "$url" "$data" >> "$API_LOG"
+printf 'AUTH %s\n' "$auth" >> "$API_LOG"
+code=200; body='{}'
+case "$method $url" in
+  "GET "*/user)                      body='{"username":"ahmad","login":"ahmad"}' ;;
+  "GET "*/deploy_keys*|"GET "*/keys*) body="$(cat "$API_STATE/keys.json" 2>/dev/null || echo '[]')" ;;
+  "POST "*/deploy_keys|"POST "*/keys) body='{"id":11}'; code=201 ;;
+  "GET "*/hooks*)                    body="$(cat "$API_STATE/hooks.json" 2>/dev/null || echo '[]')" ;;
+  "POST "*/hooks)                    body='{"id":22}'; code=201 ;;
+  "PUT "*|"PATCH "*)                 body='{"id":22}' ;;
+  "DELETE "*)                        body=''; code=204 ;;
+esac
+if [[ -n "${FORCE_CODE:-}" ]]; then code="$FORCE_CODE"; body='{"message":"403 Forbidden"}'; fi
+printf '%s\n%s' "$body" "$code"
+EOF
+  chmod +x "$T/apistub/curl"
+  printf '#!/usr/bin/env bash\nexit 255\n' > "$T/apistub/ssh"; chmod +x "$T/apistub/ssh"
+  APIPATH="$T/apistub:$PATH"
+  mkdir -p "$AUTODEPLOY_HOME/config"
+  echo "WEBHOOK_BASE='http://203.0.113.5:5678/webhook/deploy'" > "$AUTODEPLOY_HOME/config/server.env"
+
+  echo "glpat-SECRETTOKEN123" | PATH="$APIPATH" "$B/autodeploy" token set gitlab.com >/dev/null 2>&1
+  check "token saved 600 root-only"    [ "$(stat -c %a "$AUTODEPLOY_TOKENS_DIR/gitlab.com.token")" = 600 ]
+  check "token verified with /user"    grep -q "GET https://gitlab.com/api/v4/user" "$API_LOG"
+  check "token not in curl arguments"  bash -c '! grep -v "^AUTH" "'"$API_LOG"'" | grep -q SECRETTOKEN'
+  FORCE_CODE=401 bash -c 'echo bad | PATH="'"$APIPATH"'" "'"$B"'/autodeploy" token set gitlab.example.org >/dev/null 2>&1'
+  check "rejected token not saved"     [ ! -e "$AUTODEPLOY_TOKENS_DIR/gitlab.example.org.token" ]
+  check "token list"                   bash -c 'PATH="'"$APIPATH"'" "'"$B"'/autodeploy" token list | grep -qx gitlab.com'
+
+  : > "$API_LOG"
+  NAME=glapp REPO_URL=git@gitlab.com:me/gl-app.git APP_TYPE=static BUILD_CMD=none INSTALL_CMD=none BRANCH=prod \
+    AUTODEPLOY_DEFER_SETUP=1 "$B/add-project.sh" >/dev/null 2>&1
+  out="$(PATH="$APIPATH" "$B/connect.sh" glapp --no-run 2>&1)"; code=$?
+  check "connect (gitlab) succeeds"    [ "$code" = 0 ]
+  check "deploy key posted read-only"  grep -q 'POST https://gitlab.com/api/v4/projects/me%2Fgl-app/deploy_keys .*"can_push":false' "$API_LOG"
+  check "webhook posted with branch"   grep -q 'POST https://gitlab.com/api/v4/projects/me%2Fgl-app/hooks .*"push_events_branch_filter":"prod"' "$API_LOG"
+  check "webhook url has project"      grep -q '"url":"http://203.0.113.5:5678/webhook/deploy?project=glapp"' "$API_LOG"
+  check "ssl verification off for http" grep -q '"enable_ssl_verification":false' "$API_LOG"
+  check "plain-http warning shown"     grep -q "plain HTTP" <<<"$out"
+  check "no manual steps when automated" bash -c '! grep -q "STEP 1" <<<"$1"' _ "$out"
+
+  : > "$API_LOG"
+  echo '[{"id":77,"url":"http://203.0.113.5:5678/webhook/deploy?project=glapp"},{"id":78,"url":"http://x/webhook/deploy?project=glapp2"}]' > "$API_STATE/hooks.json"
+  PATH="$APIPATH" "$B/connect.sh" glapp --no-run >/dev/null 2>&1
+  check "re-run updates existing hook" grep -q 'PUT https://gitlab.com/api/v4/projects/me%2Fgl-app/hooks/77 ' "$API_LOG"
+  check "re-run does not duplicate"    bash -c '! grep -q "^POST .*/hooks " "'"$API_LOG"'"'
+
+  : > "$API_LOG"
+  out="$(FORCE_CODE=403 PATH="$APIPATH" "$B/connect.sh" glapp --no-run 2>&1)"; code=$?
+  check "API error fails connect"      [ "$code" = 1 ] && grep -q "403" <<<"$out"
+  check "manual steps shown on failure" grep -q "STEP 1" <<<"$out"
+
+  echo "ghp_GITHUBSECRET" | PATH="$APIPATH" "$B/autodeploy" token set github.com >/dev/null 2>&1
+  : > "$API_LOG"; rm -f "$API_STATE/hooks.json"
+  echo "WEBHOOK_BASE='https://n8n.example.com/webhook/deploy'" > "$AUTODEPLOY_HOME/config/server.env"
+  NAME=ghapp REPO_URL=https://github.com/me/gh-app APP_TYPE=static BUILD_CMD=none INSTALL_CMD=none \
+    AUTODEPLOY_DEFER_SETUP=1 "$B/add-project.sh" >/dev/null 2>&1
+  PATH="$APIPATH" "$B/connect.sh" ghapp --no-run >/dev/null 2>&1; code=$?
+  check "connect (github) succeeds"    [ "$code" = 0 ]
+  check "github key read_only"         grep -q 'POST https://api.github.com/repos/me/gh-app/keys .*"read_only":true' "$API_LOG"
+  check "github hook push-only json"   grep -q 'POST https://api.github.com/repos/me/gh-app/hooks .*"events":\["push"\].*"content_type":"json"' "$API_LOG"
+  check "github hook url has token"    grep -qE '"url":"https://n8n.example.com/webhook/deploy\?project=ghapp&token=[a-f0-9]{48}"' "$API_LOG"
+  check "github ssl verified (https)"  grep -q '"insecure_ssl":"0"' "$API_LOG"
+  check "github bearer auth"           grep -q 'AUTH header = "Authorization: Bearer ghp_GITHUBSECRET"' "$API_LOG"
+
+  : > "$API_LOG"
+  echo '[{"id":5,"title":"autodeploy-'"$(hostname)"'-ghapp"},{"id":6,"title":"other"}]' > "$API_STATE/keys.json"
+  echo '[{"id":9,"config":{"url":"https://n8n.example.com/webhook/deploy?project=ghapp&token=abc"}}]' > "$API_STATE/hooks.json"
+  PATH="$APIPATH" "$B/autodeploy" remove ghapp >/dev/null 2>&1
+  check "remove deletes deploy key"    grep -q 'DELETE https://api.github.com/repos/me/gh-app/keys/5 ' "$API_LOG"
+  check "remove keeps other keys"      bash -c '! grep -q "DELETE .*/keys/6" "'"$API_LOG"'"'
+  check "remove deletes webhook"       grep -q 'DELETE https://api.github.com/repos/me/gh-app/hooks/9 ' "$API_LOG"
+
+  NAME=manual REPO_URL=git@code.example.com:me/x.git APP_TYPE=static BUILD_CMD=none INSTALL_CMD=none \
+    AUTODEPLOY_DEFER_SETUP=1 "$B/add-project.sh" >/dev/null 2>&1
+  out="$(PATH="$APIPATH" "$B/connect.sh" manual --no-run 2>&1)"; code=$?
+  check "no token: manual steps"       [ "$code" = 0 ] && grep -q "STEP 1" <<<"$out" && grep -q "token set code.example.com" <<<"$out"
+  unset AUTODEPLOY_TOKENS_DIR API_LOG API_STATE CONNECT_RETRIES
+else
+  echo "token/connect tests skipped (needs root)"
+fi
+
 echo "notification requests"
 mkdir -p "$T/curlstub"
 cat > "$T/curlstub/curl" <<'EOF'

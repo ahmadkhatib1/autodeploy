@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.0 — 2026-11-26
+
+- **Automatic GitLab / GitHub setup.** `sudo autodeploy token set [host]` saves a verified API
+  token (root-only). `sudo autodeploy add` and the new `sudo autodeploy connect <project>` then
+  create the read-only deploy key and push-only webhook through the API, check access, set up
+  sudo for script projects and offer the first run. Re-running updates the existing webhook
+  instead of adding another. Works with gitlab.com, github.com, self-hosted GitLab and GitHub
+  Enterprise.
+- `sudo autodeploy remove` also deletes the project's deploy key and webhook when a token is saved.
+- **Flags for `autodeploy add`** (`--name --repo --branch --type --script --as-root --health … --yes`)
+  for one-line, scriptable setup.
+- Webhook SSL verification follows the n8n URL (on for https, off with a warning for http).
+- **Fix:** settings given as environment variables were dropped when `sudo autodeploy add`
+  switched to the deploy user, so non-interactive setup failed.
+- CI runs the test suite as root, so the sudo and API tests run there too.
+
 ## 1.2.0 — 2026-11-26
 
 - **New app type `script`**: run your own deploy script (Docker Compose, migrations, backups,

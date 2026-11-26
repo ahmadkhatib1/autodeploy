@@ -73,7 +73,9 @@ START_CMD='corepack pnpm --filter web start'
 | `AUTODEPLOY_USER` | `deploy` | User that owns apps and runs pm2. |
 | `NODE_MAJOR` | `22` | Node.js version installed by `install.sh`. |
 | `N8N_DOMAIN` | asked | Pre-answer the domain question in `install.sh`. |
-| `AUTODEPLOY_NONINTERACTIVE` | unset | `1` = accept defaults instead of prompting (for scripts). |
+| `AUTODEPLOY_NONINTERACTIVE` | unset | `1` = accept defaults instead of prompting (same as `add --yes`). |
+| `AUTODEPLOY_TOKENS_DIR` | `/etc/autodeploy/tokens` | Where `autodeploy token set` stores API tokens (root-only). |
+| `CONNECT_RETRIES` | `5` | How many times `connect` checks deploy-key access (2 s apart). |
 
 Every `autodeploy add` prompt can also be pre-answered with an env var of the same name:
 

@@ -66,8 +66,10 @@ The installer prints these steps at the end:
 ## Add a project
 
 ```bash
-autodeploy add
+sudo autodeploy add
 ```
+
+Run with `sudo` so autodeploy can finish everything itself: add the deploy key and webhook through the API (once you've saved a token, see below), create the sudo rule for script projects, then run the first deploy or dry run.
 
 | Prompt | Example |
 |---|---|
@@ -83,7 +85,38 @@ autodeploy add
 | Healthcheck URL | `http://127.0.0.1:3000` or `none` |
 | Notifications | empty = server default, or e.g. `telegram` |
 
-The script then prints exactly what to paste, for the provider you chose.
+Every prompt can also be given as a flag, which makes adding a project a single command:
+
+```bash
+sudo autodeploy add --name shop --repo git@gitlab.com:me/shop.git --branch main \
+  --type script --script /opt/shop/deploy/auto-deploy.sh --as-root yes \
+  --health https://shop.example.com/health --yes
+```
+
+Flags: `--name --repo --provider --branch --type --install --build --start --port --health --script --as-root --rollback --notify`, plus `--yes` to accept defaults for anything not given.
+
+### Automatic GitLab / GitHub setup (recommended)
+
+Save an API token for your Git host once:
+
+```bash
+sudo autodeploy token set              # gitlab.com
+sudo autodeploy token set github.com
+sudo autodeploy token set gitlab.mycompany.com   # self-hosted works too
+```
+
+From then on, `sudo autodeploy add` (and `sudo autodeploy connect <project>` for existing projects) adds the read-only **deploy key** and the push-only **webhook** for you, checks that the key can read the branch, and re-uses the existing webhook if you run it again.
+
+| Host | Token |
+|---|---|
+| GitLab | personal, group or project access token with the `api` scope and **Maintainer** role on the project |
+| GitHub | fine-grained token limited to your repos with **Administration** and **Webhooks**: read & write (or classic: `repo` + `admin:repo_hook`) |
+
+Tokens are verified before saving and stored root-only in `/etc/autodeploy/tokens/<host>.token` (mode 600). They are never printed or passed on a command line. `autodeploy remove <project>` also deletes the deploy key and webhook. Manage tokens with `token list | test [host] | remove <host>`.
+
+### Manual setup
+
+Without a token, autodeploy prints exactly what to paste for the provider you chose.
 
 **GitLab**
 
@@ -124,13 +157,16 @@ Full guide, contract and security notes: [docs/custom-script.md](docs/custom-scr
 ## Commands
 
 ```bash
+sudo autodeploy add [flags]        # register a project (asks for anything not given)
+sudo autodeploy connect <project>  # (re)create deploy key + webhook via API, sudo rule, first run
+sudo autodeploy token set [host]   # save a GitLab / GitHub API token (also: list, test, remove)
 autodeploy list                    # projects and their live release
 autodeploy deploy <project>        # deploy now
 autodeploy deploy <project> --dry-run   # script projects: show the plan only
 autodeploy rollback <project> [r]  # back to the previous (or a given) release
 sudo autodeploy allow-sudo <project>    # script projects: (re)create the sudo rule
 autodeploy logs <project>          # latest deploy log
-autodeploy remove <project>        # unregister (files are kept)
+sudo autodeploy remove <project>   # unregister; with a token also deletes key + webhook (files are kept)
 autodeploy notify-setup            # choose / change notification channels
 autodeploy notify-test             # send a test message
 autodeploy info                    # paths and webhook base URL

@@ -1,6 +1,6 @@
 {
   "name": "@ahmadkhatib/autodeploy",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Self-hosted auto-deploy from GitLab or GitHub to your own server with n8n: zero-downtime releases, automatic rollback, Telegram / email / WhatsApp notifications.",
   "keywords": [
     "deploy",

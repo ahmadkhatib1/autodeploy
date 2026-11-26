@@ -36,6 +36,7 @@ Failed releases are deleted, so `autodeploy rollback` never picks a broken one.
 ## Security model
 
 - **n8n key**: `restrict,command="/opt/autodeploy/bin/trigger.sh",from="<private ranges>"`. No shell, no PTY, no forwarding, only from Docker or local networks.
+- **API tokens** (for `token set` / `connect`) live in `/etc/autodeploy/tokens/<host>.token`, root-only (dir 700, file 600). Only root-run commands read them, never the `deploy` user or n8n. They reach `curl` through a config file descriptor, never as arguments, and are checked against the host's `/user` endpoint before saving. Use the narrowest token possible: a project access token on GitLab, or a fine-grained token limited to the deployed repos on GitHub.
 - **No execution of input**: `trigger.sh` never evaluates the request. Project, token and ref must match `^[a-z0-9][a-z0-9-]{0,39}$`, `^[A-Za-z0-9]{16,128}$` and `^refs/heads/[A-Za-z0-9._/-]{1,100}$`.
 - **Per-project token** (48 hex characters) and **read-only deploy key** per repository.
 - With GitHub the token is part of the webhook URL, so it also appears in GitHub's webhook settings and in n8n's execution data. Anyone with admin access to either can see it; rotate it by editing `DEPLOY_TOKEN` and the webhook URL.

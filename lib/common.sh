@@ -22,12 +22,41 @@ warn() { echo "WARN: $*" >&2; }
 
 valid_project_name() { [[ "$1" =~ $PROJECT_RE ]]; }
 
+# Settings that may be given as environment variables (e.g. for a
+# non-interactive "sudo autodeploy add"). sudo drops the environment, so these
+# are handed over explicitly when switching to the deploy user.
+PASS_VARS=(NAME REPO_URL GIT_PROVIDER BRANCH APP_TYPE INSTALL_CMD BUILD_CMD START_CMD PORT
+  HEALTHCHECK_URL HEALTHCHECK_TIMEOUT NOTIFY_CHANNELS DEPLOY_SCRIPT DEPLOY_AS_ROOT ROLLBACK_SCRIPT
+  AUTODEPLOY_NONINTERACTIVE AUTODEPLOY_DEFER_SETUP AUTODEPLOY_RESULT_FILE NOTIFY_DRY_RUN)
+
+# Fill DEPLOY_ENV with "VAR=value" for every PASS_VARS entry that is set.
+_collect_deploy_env() {
+  local v
+  DEPLOY_ENV=("AUTODEPLOY_HOME=$AUTODEPLOY_HOME")
+  for v in "${PASS_VARS[@]}"; do
+    if declare -p "$v" >/dev/null 2>&1; then DEPLOY_ENV+=("$v=${!v}"); fi
+  done
+}
+
+needs_user_switch() { [[ $EUID -eq 0 && -z "${AUTODEPLOY_ALLOW_ROOT:-}" ]]; }
+
+# Run a command as the deploy user (or directly when no switch is needed).
+run_as_deploy() {
+  if needs_user_switch; then
+    _collect_deploy_env
+    sudo -u "$AUTODEPLOY_USER" -H env "${DEPLOY_ENV[@]}" "$@"
+  else
+    "$@"
+  fi
+}
+
 # Re-run the current script as the deploy user when started as root,
 # so every file it creates is owned by that user.
 ensure_deploy_user() {
-  if [[ $EUID -eq 0 && -z "${AUTODEPLOY_ALLOW_ROOT:-}" ]]; then
+  if needs_user_switch; then
     id "$AUTODEPLOY_USER" >/dev/null 2>&1 || die "user '$AUTODEPLOY_USER' does not exist. Run install.sh first."
-    exec sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$0" "$@"
+    _collect_deploy_env
+    exec sudo -u "$AUTODEPLOY_USER" -H env "${DEPLOY_ENV[@]}" "$0" "$@"
   fi
 }
 

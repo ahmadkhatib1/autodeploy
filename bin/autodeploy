@@ -6,12 +6,50 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 LIB_DIR="${AUTODEPLOY_LIB:-$SCRIPT_DIR/../lib}"
 # shellcheck source=../lib/common.sh
 source "$LIB_DIR/common.sh"
+# shellcheck source=../lib/steps.sh
+source "$LIB_DIR/steps.sh"
+# shellcheck source=../lib/remote.sh
+source "$LIB_DIR/remote.sh"
+
+# Flags for `autodeploy add` (each one pre-answers a question).
+parse_add_flags() {
+  while [[ $# -gt 0 ]]; do
+    local opt="$1" val="${2:-}"
+    case "$opt" in
+      --yes|-y) export AUTODEPLOY_NONINTERACTIVE=1; shift; continue ;;
+    esac
+    [[ $# -ge 2 ]] || die "option $opt needs a value"
+    case "$opt" in
+      --name)       export NAME="$val" ;;
+      --repo)       export REPO_URL="$val" ;;
+      --provider)   export GIT_PROVIDER="$val" ;;
+      --branch)     export BRANCH="$val" ;;
+      --type)       export APP_TYPE="$val" ;;
+      --install)    export INSTALL_CMD="$val" ;;
+      --build)      export BUILD_CMD="$val" ;;
+      --start)      export START_CMD="$val" ;;
+      --port)       export PORT="$val" ;;
+      --health)     export HEALTHCHECK_URL="$val" ;;
+      --script)     export DEPLOY_SCRIPT="$val" ;;
+      --as-root)    export DEPLOY_AS_ROOT="$val" ;;
+      --rollback)   export ROLLBACK_SCRIPT="$val" ;;
+      --notify)     export NOTIFY_CHANNELS="$val" ;;
+      *) die "unknown option '$opt' (see: autodeploy help)" ;;
+    esac
+    shift 2
+  done
+}
 
 usage() {
   cat <<EOF
 Usage: autodeploy <command> [args]
 
-  add                       Register a new project (interactive)
+  add [flags]               Register a new project (asks for anything not given)
+                            flags: --name --repo --branch --provider --type --install
+                                   --build --start --port --health --script --as-root
+                                   --rollback --notify --yes
+  connect <project>         (root) Add deploy key + webhook via API, sudo rule, first run
+  token set|list|test|remove [host]  (root) GitLab / GitHub API tokens for 'connect'
   list                      Show projects and their live release
   deploy <project>          Deploy now (even if nothing changed)
   deploy <project> --dry-run  Script projects: run the script with --dry-run
@@ -29,31 +67,23 @@ cmd="${1:-}"; shift || true
 
 case "$cmd" in
   add)
-    if [[ $EUID -ne 0 || -n "${AUTODEPLOY_ALLOW_ROOT:-}" ]]; then
-      exec "$SCRIPT_DIR/add-project.sh" "$@"
+    parse_add_flags "$@"
+    if ! needs_user_switch; then
+      exec "$SCRIPT_DIR/add-project.sh"
     fi
-    # As root: register the project as the deploy user, then do the root-only
-    # part (sudo rule) for script projects that run as root.
+    # As root: register the project as the deploy user, then finish the setup
+    # as root (API connect, sudo rule, first run) with `connect`.
     result="$(mktemp)"
     trap 'rm -f "$result"' EXIT
     chown "$AUTODEPLOY_USER" "$result"
-    sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" AUTODEPLOY_RESULT_FILE="$result" \
-      "$SCRIPT_DIR/add-project.sh" "$@"
+    AUTODEPLOY_RESULT_FILE="$result" AUTODEPLOY_DEFER_SETUP=1 run_as_deploy "$SCRIPT_DIR/add-project.sh"
     name="$(head -n 1 "$result")"
-    valid_project_name "$name" || exit 0
-    ( APP_TYPE="" DEPLOY_AS_ROOT=""
-      load_env_file "$PROJECTS_DIR/$name.env"
-      [[ "$APP_TYPE" == "script" && "$DEPLOY_AS_ROOT" == "yes" ]] ) || exit 0
+    valid_project_name "$name" || exit 1
     echo
-    info "Setting up sudo for '$name'"
-    if ! "$SCRIPT_DIR/allow-sudo.sh" "$name"; then
-      warn "sudo is not set up yet. Fix the problem above, then run: sudo autodeploy allow-sudo $name"
-      exit 1
-    fi
-    if ask_yes_no "Run a dry run of the script now?" "y"; then
-      sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$SCRIPT_DIR/deploy.sh" "$name" --dry-run || true
-    fi
+    "$SCRIPT_DIR/connect.sh" "$name"
     ;;
+  connect)       exec "$SCRIPT_DIR/connect.sh" "$@" ;;
+  token)         exec "$SCRIPT_DIR/token.sh" "$@" ;;
   deploy)
     name="${1:-}"; shift || true
     exec "$SCRIPT_DIR/deploy.sh" "$name" --force "$@" ;;
@@ -85,6 +115,11 @@ case "$cmd" in
     valid_project_name "$name" || die "usage: autodeploy remove <project>"
     [[ -f "$PROJECTS_DIR/$name.env" ]] || die "project '$name' not found"
     if [[ $EUID -eq 0 ]]; then
+      # Remove the deploy key and webhook on GitLab / GitHub when a token is saved.
+      ( load_env_file "$CONFIG_DIR/server.env" || true
+        load_env_file "$PROJECTS_DIR/$name.env"
+        NAME="$name"
+        remote_teardown ) && remote_done=1 || remote_done=0
       sudoers_file="${SUDOERS_DIR:-/etc/sudoers.d}/autodeploy-$name"
       if [[ -f "$sudoers_file" ]]; then
         mkdir -p "$AUTODEPLOY_HOME/removed"
@@ -92,7 +127,7 @@ case "$cmd" in
         info "sudo rule for '$name' disabled"
       fi
       if [[ -z "${AUTODEPLOY_ALLOW_ROOT:-}" ]]; then
-        exec sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$0" remove "$name"
+        exec sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" AUTODEPLOY_REMOTE_DONE="$remote_done" "$0" remove "$name"
       fi
     fi
     pm2 delete "$name" >/dev/null 2>&1 && pm2 save >/dev/null 2>&1 || true
@@ -102,7 +137,9 @@ case "$cmd" in
     [[ -f "$KEYS_DIR/$name" ]] && mv "$KEYS_DIR/$name" "$AUTODEPLOY_HOME/removed/$name.$stamp.key"
     [[ -f "$KEYS_DIR/$name.pub" ]] && mv "$KEYS_DIR/$name.pub" "$AUTODEPLOY_HOME/removed/$name.$stamp.key.pub"
     info "removed '$name'. Its files stay in $APPS_DIR/$name — delete that folder yourself if you no longer need it."
-    info "Also delete the webhook and deploy key in GitLab / GitHub."
+    if [[ "${AUTODEPLOY_REMOTE_DONE:-${remote_done:-0}}" != "1" ]]; then
+      info "Also delete the webhook and deploy key in GitLab / GitHub."
+    fi
     ;;
   info)
     load_env_file "$CONFIG_DIR/server.env" || true

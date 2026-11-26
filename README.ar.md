@@ -66,8 +66,10 @@ sudo bash install.sh
 ## 4) إضافة مشروع (لكل مشروع)
 
 ```bash
-autodeploy add
+sudo autodeploy add
 ```
+
+شغّله بـ`sudo` لتكمل الأداة كل شيء بنفسها: تضيف مفتاح النشر والـwebhook عبر الـAPI (بعد أن تحفظ توكن، انظر أدناه)، وتنشئ قاعدة sudo لمشاريع script، ثم تشغّل أول نشر أو تجربة جافة.
 
 سيسألك عن:
 
@@ -85,7 +87,38 @@ autodeploy add
 | رابط الفحص | `http://127.0.0.1:3000` أو `none` |
 | الإشعارات | فارغ = إعداد السيرفر، أو مثلاً `telegram` لهذا المشروع فقط |
 
-ثم يطبع لك بالضبط ما تلصقه، حسب المنصة التي اخترتها:
+ويمكنك تمرير كل الأجوبة كخيارات، فتصبح إضافة مشروع أمراً واحداً:
+
+```bash
+sudo autodeploy add --name shop --repo git@gitlab.com:me/shop.git --branch main \
+  --type script --script /opt/shop/deploy/auto-deploy.sh --as-root yes \
+  --health https://shop.example.com/health --yes
+```
+
+الخيارات: `--name --repo --provider --branch --type --install --build --start --port --health --script --as-root --rollback --notify`، و`--yes` لقبول القيم الافتراضية لما لم تحدده.
+
+### الربط التلقائي مع GitLab / GitHub (موصى به)
+
+احفظ توكن API لمنصتك مرة واحدة:
+
+```bash
+sudo autodeploy token set              # gitlab.com
+sudo autodeploy token set github.com
+sudo autodeploy token set gitlab.mycompany.com   # يعمل مع GitLab الخاص أيضاً
+```
+
+بعدها، `sudo autodeploy add` (و`sudo autodeploy connect <project>` للمشاريع الموجودة) يضيف لك **مفتاح النشر** للقراءة فقط و**الـwebhook** لأحداث الـpush فقط، ويتأكد أن المفتاح يقرأ الفرع. وإذا أعدت التشغيل يحدّث الـwebhook الموجود بدل أن يكرره.
+
+| المنصة | التوكن المطلوب |
+|---|---|
+| GitLab | توكن شخصي أو توكن مجموعة أو مشروع، بصلاحية `api` ودور **Maintainer** على المشروع |
+| GitHub | توكن fine-grained محصور بمستودعاتك، مع صلاحيتي **Administration** و**Webhooks** قراءة وكتابة (أو classic بصلاحيتي `repo` و`admin:repo_hook`) |
+
+يُفحص التوكن قبل حفظه، ويُخزَّن لـroot فقط في `/etc/autodeploy/tokens/<host>.token` بصلاحية 600، ولا يُطبع أبداً ولا يمر في سطر الأوامر. و`autodeploy remove <project>` يحذف مفتاح النشر والـwebhook أيضاً. لإدارة التوكنات: `token list` و`token test [host]` و`token remove <host>`.
+
+### الإعداد اليدوي
+
+بدون توكن، تطبع لك الأداة بالضبط ما تلصقه حسب المنصة التي اخترتها:
 
 **GitLab**
 
@@ -170,13 +203,16 @@ sudo -u deploy nano /opt/autodeploy/apps/hisabyy/shared/.env
 ## 5) الأوامر
 
 ```bash
+sudo autodeploy add [خيارات]       # تسجيل مشروع (يسأل عمّا لم تحدده)
+sudo autodeploy connect hisabyy    # إنشاء مفتاح النشر والـwebhook عبر الـAPI من جديد، وقاعدة sudo، وأول تشغيل
+sudo autodeploy token set [host]   # حفظ توكن GitLab / GitHub (وأيضاً list وtest وremove)
 autodeploy list                    # المشاريع والنسخة الحالية لكل منها
 autodeploy deploy hisabyy          # نشر يدوي الآن
 autodeploy deploy hisabyy --dry-run      # لمشاريع script: عرض الخطة فقط
 autodeploy rollback hisabyy        # الرجوع للنسخة السابقة
 sudo autodeploy allow-sudo hisabyy       # لمشاريع script: إنشاء قاعدة sudo من جديد
 autodeploy logs hisabyy            # آخر سجل نشر
-autodeploy remove hisabyy          # إلغاء تسجيل مشروع (الملفات تبقى)
+sudo autodeploy remove hisabyy     # إلغاء تسجيل مشروع، ومع التوكن يحذف المفتاح والـwebhook (الملفات تبقى)
 autodeploy notify-setup            # تغيير قنوات الإشعارات
 autodeploy notify-test             # رسالة تجربة
 autodeploy info                    # المسارات ورابط الـwebhook

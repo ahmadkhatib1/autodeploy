@@ -45,6 +45,9 @@ sudo chmod 750 deploy/auto-deploy.sh
 
 ```bash
 sudo autodeploy add
+# or in one line:
+sudo autodeploy add --name myapp --repo git@gitlab.com:me/myapp.git --branch main \
+  --type script --script /opt/myapp/deploy/auto-deploy.sh --as-root yes --yes
 ```
 
 | Prompt | Answer |
@@ -60,14 +63,13 @@ sudo autodeploy add
 
 Run as root (`sudo autodeploy add`), it also:
 
-1. **Creates the sudo rule** (`/etc/sudoers.d/autodeploy-myapp`) after checking that the script is a root-owned regular file, not writable by group/others, inside folders only root can write to. The rule allows exactly:
+1. **Adds the deploy key and webhook** through the GitLab / GitHub API if you saved a token (`sudo autodeploy token set`); otherwise it prints them for you to paste.
+2. **Creates the sudo rule** (`/etc/sudoers.d/autodeploy-myapp`) after checking that the script is a root-owned regular file, not writable by group/others, inside folders only root can write to. The rule allows exactly:
    ```
    deploy ALL=(root) NOPASSWD: /opt/myapp/deploy/auto-deploy.sh "", /opt/myapp/deploy/auto-deploy.sh --dry-run
    ```
    No other arguments and no environment variables. If you ran `add` without sudo, or fixed permissions later: `sudo autodeploy allow-sudo myapp`.
-2. **Offers a dry run** right away.
-
-Then add the deploy key and webhook it printed to GitLab / GitHub, as for any project.
+3. **Offers a dry run** right away.
 
 ### 3. Test
 

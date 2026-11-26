@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 LIB_DIR="${AUTODEPLOY_LIB:-$SCRIPT_DIR/../lib}"
 # shellcheck source=../lib/common.sh
 source "$LIB_DIR/common.sh"
+# shellcheck source=../lib/steps.sh
+source "$LIB_DIR/steps.sh"
 
 ensure_deploy_user "$@"
 
@@ -126,104 +128,21 @@ umask 022
 mkdir -p "$APPS_DIR/$NAME"
 [[ "$APP_TYPE" == "script" ]] || mkdir -p "$APPS_DIR/$NAME/shared"
 
-if [[ "$GIT_PROVIDER" == "github" ]]; then
-  PROVIDER_LABEL="GitHub"
-  KEY_WHERE="Repository > Settings > Deploy keys > Add deploy key  (leave 'Allow write access' OFF)"
-else
-  PROVIDER_LABEL="GitLab"
-  KEY_WHERE="Project > Settings > Repository > Deploy keys > Add new key  (no write access)"
-fi
-
-cat <<EOF
-
-------------------------------------------------------------------
-STEP 1 — Add this Deploy Key in $PROVIDER_LABEL (read-only):
-  $KEY_WHERE
-  Title: autodeploy-$(hostname)
-  Key:
-
-$(cat "$KEY.pub")
-
-------------------------------------------------------------------
-EOF
-
-if [[ "${AUTODEPLOY_NONINTERACTIVE:-}" != "1" ]]; then
-  for attempt in 1 2 3; do
-    read -r -p "Press Enter after you add the key (attempt $attempt/3)… " _
-    if GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$CONFIG_DIR/known_hosts" \
-       git ls-remote --heads "$REPO_URL" "$BRANCH" | grep -q .; then
-      info "$PROVIDER_LABEL access OK, branch '$BRANCH' found"
-      break
-    fi
-    warn "could not read branch '$BRANCH' from $REPO_URL yet"
-    [[ $attempt == 3 ]] && warn "continuing anyway; the first deploy will fail until the key works"
-  done
-fi
-
-BASE="${WEBHOOK_BASE:-https://YOUR-N8N-HOST/webhook/deploy}"
-
-if [[ "$GIT_PROVIDER" == "github" ]]; then
-  # GitHub has no plain secret header, so the token travels in the URL (use HTTPS).
-  cat <<EOF
-
-------------------------------------------------------------------
-STEP 2 — Add the webhook in GitHub:
-  Repository > Settings > Webhooks > Add webhook
-  Payload URL:   $BASE?project=$NAME&token=$DEPLOY_TOKEN
-  Content type:  application/json
-  Secret:        (leave empty)
-  SSL verification: Enable (needs n8n on https)
-  Which events:  Just the push event
-EOF
-else
-  cat <<EOF
-
-------------------------------------------------------------------
-STEP 2 — Add the webhook in GitLab:
-  Project > Settings > Webhooks > Add new webhook
-  URL:           $BASE?project=$NAME
-  Secret token:  $DEPLOY_TOKEN
-  Trigger:       Push events  (branch filter: $BRANCH)
-  SSL verification: on (if n8n uses https)
-EOF
-fi
-
 [[ -n "${AUTODEPLOY_RESULT_FILE:-}" ]] && printf '%s\n' "$NAME" > "$AUTODEPLOY_RESULT_FILE"
 
-if [[ "$APP_TYPE" == "script" ]]; then
-  sudo_step=""
-  if [[ "$DEPLOY_AS_ROOT" == "yes" ]]; then
-    sudo_step="
-STEP 3 — Allow the deploy user to run ONLY this script as root
-  (done for you when you run 'sudo autodeploy add'):
-    sudo autodeploy allow-sudo $NAME
-"
-  fi
-  cat <<EOF
-$sudo_step
-STEP 4 — Dry run (your script receives --dry-run and should change nothing):
-    autodeploy deploy $NAME --dry-run
-
-Then push to '$BRANCH'. Your script contract:
-  - exit 0 = deployed, anything else = failed (its output goes in the notification)
-  - it pulls the code, builds, migrates and rolls back by itself
-------------------------------------------------------------------
-
-Project '$NAME' is registered.
-EOF
+# "sudo autodeploy add" finishes the setup itself (API connect, sudo rule, first run).
+if [[ "${AUTODEPLOY_DEFER_SETUP:-}" == "1" ]]; then
+  info "Project '$NAME' is registered."
   exit 0
 fi
 
-cat <<EOF
+print_key_step
+wait_for_key_access
+print_webhook_step
+print_final_steps
+echo
+echo "Project '$NAME' is registered."
 
-STEP 3 — Put the app's secrets (if any) here, they are linked into
-every release automatically:
-  $APPS_DIR/$NAME/shared/.env
-------------------------------------------------------------------
-
-Project '$NAME' is registered.
-EOF
-
-if ask_yes_no "Run the first deploy now?" "y"; then
+if [[ "$APP_TYPE" != "script" ]] && ask_yes_no "Run the first deploy now?" "y"; then
   "$SCRIPT_DIR/deploy.sh" "$NAME" --force
 fi

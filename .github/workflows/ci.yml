@@ -18,4 +18,4 @@ jobs:
       - name: ShellCheck
         run: shellcheck -S error install.sh bin/*.sh bin/autodeploy lib/*.sh tests/*.sh examples/*.sh
       - name: End-to-end tests
-        run: npm test
+        run: sudo -E env "PATH=$PATH" bash tests/run.sh
