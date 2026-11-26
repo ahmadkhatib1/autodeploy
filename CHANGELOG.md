@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 — 2026-11-26
+
+- **GitHub support.** Each project chooses `gitlab` or `github` (`GIT_PROVIDER`, detected from the URL).
+  `autodeploy add` prints the right deploy-key and webhook steps for each.
+- n8n workflow accepts both GitLab and GitHub push webhooks and ignores GitHub *ping* events.
+  **Upgrading:** re-import `n8n/workflow.json` in n8n and select the SSH credential again.
+- `autodeploy list` shows each project's source.
+
 ## 1.0.0 — 2026-11-26
 
 First release.

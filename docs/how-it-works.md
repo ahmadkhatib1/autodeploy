@@ -2,8 +2,11 @@
 
 ## Flow
 
-1. **GitLab** sends a *Push Hook* to `https://<n8n>/webhook/deploy?project=<name>` with the header `X-Gitlab-Token`.
-2. **n8n** (workflow `n8n/workflow.json`) checks the event type and the format of the project name, token and ref, then opens an SSH connection to the host as `deploy` and sends `<project> <token> <ref>`.
+1. The Git host sends a push webhook to n8n:
+   - **GitLab**: `https://<n8n>/webhook/deploy?project=<name>`, token in the `X-Gitlab-Token` header, event `Push Hook`.
+   - **GitHub**: `https://<n8n>/webhook/deploy?project=<name>&token=<token>`, event header `X-GitHub-Event: push`.
+     GitHub only offers HMAC signatures, which would require n8n to know every project's secret. The token is in the URL instead, so n8n stays generic. Use HTTPS so the URL is encrypted in transit.
+2. **n8n** (workflow `n8n/workflow.json`) normalizes both formats into `project`, `token`, `ref`, ignores anything that isn't a push (e.g. GitHub's *ping*), checks the format of each value, then opens an SSH connection to the host as `deploy` and sends `<project> <token> <ref>`.
 3. On the server, that SSH key is pinned in `authorized_keys` to a **forced command**, so whatever n8n sends only reaches **`trigger.sh`** as text. It:
    - takes the last three words and checks each against a strict pattern,
    - loads the project file and compares the token,
@@ -35,6 +38,7 @@ Failed releases are deleted, so `autodeploy rollback` never picks a broken one.
 - **n8n key**: `restrict,command="/opt/autodeploy/bin/trigger.sh",from="<private ranges>"`. No shell, no PTY, no forwarding, only from Docker or local networks.
 - **No execution of input**: `trigger.sh` never evaluates the request. Project, token and ref must match `^[a-z0-9][a-z0-9-]{0,39}$`, `^[A-Za-z0-9]{16,128}$` and `^refs/heads/[A-Za-z0-9._/-]{1,100}$`.
 - **Per-project token** (48 hex characters) and **read-only deploy key** per repository.
+- With GitHub the token is part of the webhook URL, so it also appears in GitHub's webhook settings and in n8n's execution data. Anyone with admin access to either can see it; rotate it by editing `DEPLOY_TOKEN` and the webhook URL.
 - **Secrets on disk** (`projects/`, `keys/`, `config/`) are mode 600/700 and owned by `deploy`.
 - **Secrets not in process lists**: bot tokens, SMTP passwords and API keys are passed to `curl` through a config file descriptor, not command-line arguments.
 - Config files are parsed as `KEY=value`, never `source`d.

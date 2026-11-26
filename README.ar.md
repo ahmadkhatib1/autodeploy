@@ -1,11 +1,11 @@
-# autodeploy — نشر تلقائي من GitLab إلى سيرفرك عبر n8n
+# autodeploy — نشر تلقائي من GitLab أو GitHub إلى سيرفرك عبر n8n
 
 [English](README.md) · **العربية**
 
 عند كل `git push` على الفرع المحدد، يسحب السيرفر الكود ويبنيه ويشغّل النسخة الجديدة، ثم يرسل لك رسالة على تيليغرام أو البريد أو واتساب.
 
 ```
-GitLab push ──► n8n (Webhook) ──► SSH ──► trigger.sh ──► deploy.sh
+GitLab / GitHub push ──► n8n (Webhook) ──► SSH ──► trigger.sh ──► deploy.sh
                                                           ├─ git fetch
                                                           ├─ install + build في مجلد جديد
                                                           ├─ تبديل النسخة (بدون توقف)
@@ -18,7 +18,7 @@ GitLab push ──► n8n (Webhook) ──► SSH ──► trigger.sh ──►
 - كل نشر في مجلد مستقل. إذا فشل البناء لا يتغير الموقع أبداً.
 - إذا نجح البناء وفشل فحص الموقع بعد التشغيل، يرجع تلقائياً إلى النسخة السابقة.
 - رجوع يدوي بأمر واحد: `autodeploy rollback <project>`.
-- لكل مشروع رمز سري ومفتاح GitLab خاص به (قراءة فقط).
+- لكل مشروع رمز سري ومفتاح خاص به على GitLab أو GitHub (قراءة فقط).
 - مفتاح n8n لا يستطيع تنفيذ أي شيء على السيرفر إلا سكربت النشر.
 
 ---
@@ -74,7 +74,8 @@ autodeploy add
 | السؤال | مثال |
 |---|---|
 | اسم المشروع | `hisabyy` |
-| رابط GitLab | `git@gitlab.com:you/hisabyy.git` (أو رابط https وسيحوّله) |
+| رابط المستودع | `git@gitlab.com:you/hisabyy.git` أو `https://github.com/you/site` (روابط https تُحوَّل تلقائياً) |
+| المنصة | `gitlab` أو `github` (تُكتشف من الرابط) |
 | الفرع | `main` |
 | النوع | `node` (يعمل بـpm2) أو `static` (ملفات فقط) |
 | أمر التثبيت | `auto` (يكتشف npm / pnpm / yarn / bun) |
@@ -84,13 +85,26 @@ autodeploy add
 | رابط الفحص | `http://127.0.0.1:3000` أو `none` |
 | الإشعارات | فارغ = إعداد السيرفر، أو مثلاً `telegram` لهذا المشروع فقط |
 
-ثم يعطيك شيئين تلصقهما في GitLab:
+ثم يطبع لك بالضبط ما تلصقه، حسب المنصة التي اخترتها:
+
+**GitLab**
 
 1. **Deploy key:** ضعه في **Settings ← Repository ← Deploy keys** (بدون صلاحية كتابة). السكربت ينتظرك ويتأكد أن الوصول يعمل.
 2. **Webhook:** في **Settings ← Webhooks**:
    - URL: `https://n8n.example.com/webhook/deploy?project=hisabyy`
    - Secret token: الرمز الذي طبعه السكربت
    - Trigger: **Push events** فقط، مع فلتر الفرع `main`
+
+**GitHub**
+
+1. **Deploy key:** في **Settings ← Deploy keys ← Add deploy key**، والصق المفتاح، واترك خيار *Allow write access* غير مفعّل.
+2. **Webhook:** في **Settings ← Webhooks ← Add webhook**:
+   - Payload URL: `https://n8n.example.com/webhook/deploy?project=site&token=<الرمز>`
+   - Content type: `application/json`
+   - Secret: اتركه فارغاً
+   - الأحداث: **Just the push event**
+
+> GitHub لا يرسل الرمز في header بسيط مثل GitLab، لذلك الرمز جزء من الرابط. استخدم n8n عبر HTTPS (بدومين) حتى لا يُرسل الرمز مكشوفاً.
 
 **متغيرات البيئة السرية للمشروع** (مثل `DATABASE_URL`) ضعها هنا، وستُربط بكل نسخة تلقائياً:
 
@@ -100,7 +114,7 @@ sudo -u deploy nano /opt/autodeploy/apps/hisabyy/shared/.env
 
 (يُربط تلقائياً: `.env` و`.env.local` و`.env.production`. لتغيير القائمة أضف `SHARED_PATHS` في ملف المشروع.)
 
-بعدها جرّب: ادفع commit، أو من GitLab اضغط **Test ← Push events** على الـwebhook.
+بعدها جرّب: ادفع commit، أو من GitLab اضغط **Test ← Push events** على الـwebhook. أما GitHub فيرسل رسالة ping عند إنشاء الـwebhook، وn8n يتجاهلها، وأول push بعدها يبدأ النشر.
 
 ## 5) الأوامر
 
@@ -140,7 +154,7 @@ autodeploy info                    # المسارات ورابط الـwebhook
 ├── lib/            الدوال المشتركة والإشعارات
 ├── config/         notify.env, server.env (صلاحيات 600)
 ├── projects/       <name>.env  إعدادات ورمز كل مشروع
-├── keys/           مفاتيح GitLab لكل مشروع
+├── keys/           مفاتيح GitLab / GitHub لكل مشروع
 ├── apps/<name>/
 │   ├── current ->  releases/<آخر نسخة>
 │   ├── releases/   آخر 5 نسخ
@@ -153,17 +167,17 @@ autodeploy info                    # المسارات ورابط الـwebhook
 
 - مفتاح n8n مقيّد في `authorized_keys` بأمر واحد (`trigger.sh`)، ومن شبكات Docker فقط، بلا terminal ولا port forwarding.
 - `trigger.sh` لا ينفّذ أي شيء من الطلب: يتحقق من اسم المشروع والرمز والفرع بأنماط صارمة، ثم يشغّل النشر.
-- كل مشروع له رمز webhook خاص ومفتاح GitLab للقراءة فقط.
+- كل مشروع له رمز webhook خاص ومفتاح للقراءة فقط على GitLab أو GitHub.
 - ملفات الأسرار بصلاحية `600` ومملوكة للمستخدم `deploy`.
 
 ## 9) حل المشاكل
 
 | المشكلة | الحل |
 |---|---|
-| لا يصل شيء عند الـpush | في GitLab افتح الـwebhook ← **Recent events** وانظر رمز الاستجابة. في n8n افتح **Executions**. |
-| الـexecution يقول `ERR unauthorized` | الـSecret token في GitLab لا يطابق `DEPLOY_TOKEN` في ملف المشروع. |
+| لا يصل شيء عند الـpush | في GitLab افتح الـwebhook ← **Recent events**، وفي GitHub ← **Recent Deliveries**، وانظر رمز الاستجابة. ثم في n8n افتح **Executions**. |
+| الـexecution يقول `ERR unauthorized` | الرمز (Secret token في GitLab، أو `token=` في رابط GitHub) لا يطابق `DEPLOY_TOKEN` في ملف المشروع. |
 | `SKIP branch` | الـpush على فرع غير المحدد للمشروع. |
-| فشل `git fetch` | الـDeploy key غير مضاف أو غير مفعّل لهذا المشروع في GitLab. |
+| فشل `git fetch` | الـDeploy key غير مضاف أو غير مفعّل لهذا المستودع. |
 | فشل فحص الموقع | التطبيق لا يستمع على `PORT`. افحص `app.err.log`. يمكن زيادة `HEALTHCHECK_TIMEOUT` (بالثواني) في ملف المشروع. |
 | n8n لا يتصل بـSSH | تأكد أن `sshd` يعمل وأن الجدار الناري يسمح بالمنفذ 22 من شبكة Docker. |
 

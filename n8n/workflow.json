@@ -1,5 +1,5 @@
 {
-  "name": "Autodeploy — GitLab push → server",
+  "name": "Autodeploy — GitLab / GitHub push → server",
   "nodes": [
     {
       "parameters": {
@@ -8,15 +8,62 @@
         "responseMode": "onReceived",
         "options": {}
       },
-      "id": "45123af8-1ee3-483b-8c92-68c833598b8c",
-      "name": "GitLab Webhook",
+      "id": "0e21a13e-500a-43a5-b6e1-0e23b02f9d16",
+      "name": "Git Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
         0,
         0
       ],
-      "webhookId": "7ce31c36-d11f-4d19-96c0-34d46138cbd7"
+      "webhookId": "844ea53c-61d6-4d3b-a5f0-21158f8e22cc"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5fb44581-e13a-404f-ba1f-f3a3262709f4",
+              "name": "provider",
+              "type": "string",
+              "value": "={{ $json.headers['x-github-event'] ? 'github' : ($json.headers['x-gitlab-event'] ? 'gitlab' : 'unknown') }}"
+            },
+            {
+              "id": "7bd5547c-9199-454b-837c-1dd987f5812a",
+              "name": "is_push",
+              "type": "boolean",
+              "value": "={{ $json.headers['x-github-event'] === 'push' || $json.headers['x-gitlab-event'] === 'Push Hook' }}"
+            },
+            {
+              "id": "51a2d016-64d6-47bc-9468-fb89785028a0",
+              "name": "project",
+              "type": "string",
+              "value": "={{ String($json.query.project || '') }}"
+            },
+            {
+              "id": "3e03a41b-f58d-4aed-9041-a5177247764f",
+              "name": "token",
+              "type": "string",
+              "value": "={{ String($json.headers['x-gitlab-token'] || $json.query.token || '') }}"
+            },
+            {
+              "id": "63151685-f523-403e-8dd1-7adec7f20516",
+              "name": "ref",
+              "type": "string",
+              "value": "={{ String($json.body.ref || (typeof $json.body.payload === 'string' ? JSON.parse($json.body.payload).ref : '') || '') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3006941f-ac7b-4371-9a45-99246d9237d2",
+      "name": "Normalize GitLab / GitHub",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
     },
     {
       "parameters": {
@@ -28,17 +75,18 @@
           },
           "conditions": [
             {
-              "id": "57e98647-84b4-4e48-8854-79d1d4a234f6",
-              "leftValue": "={{ $json.headers['x-gitlab-event'] }}",
-              "rightValue": "Push Hook",
+              "id": "d9b6cedd-261e-4719-9804-2a3de3edba3f",
+              "leftValue": "={{ $json.is_push }}",
+              "rightValue": "",
               "operator": {
-                "type": "string",
-                "operation": "equals"
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
             },
             {
-              "id": "d2ed5b88-f1dd-4bd4-9876-6fbf3c225abc",
-              "leftValue": "={{ $json.query.project }}",
+              "id": "99db0ca4-64c3-49be-8bcd-1bbbcfa53aa6",
+              "leftValue": "={{ $json.project }}",
               "rightValue": "^[a-z0-9][a-z0-9-]{0,39}$",
               "operator": {
                 "type": "string",
@@ -46,8 +94,8 @@
               }
             },
             {
-              "id": "f13789ab-a75b-431a-a33e-c96868c85724",
-              "leftValue": "={{ $json.headers['x-gitlab-token'] }}",
+              "id": "dc3fcc33-0c59-465d-be28-a8d746b0a893",
+              "leftValue": "={{ $json.token }}",
               "rightValue": "^[A-Za-z0-9]{16,128}$",
               "operator": {
                 "type": "string",
@@ -55,8 +103,8 @@
               }
             },
             {
-              "id": "d1dcd565-9fac-455a-9376-6e10b5618e54",
-              "leftValue": "={{ $json.body.ref }}",
+              "id": "5e7d611b-dde7-4076-b516-eb813dcd3503",
+              "leftValue": "={{ $json.ref }}",
               "rightValue": "^refs/heads/[A-Za-z0-9._/-]{1,100}$",
               "operator": {
                 "type": "string",
@@ -68,55 +116,66 @@
         },
         "options": {}
       },
-      "id": "c1adddd5-658b-4cf7-84f9-3e8f07d76edc",
-      "name": "Valid GitLab push?",
+      "id": "9aaa71e8-766f-4b9b-aaec-4c709a8601ea",
+      "name": "Valid push?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        240,
+        440,
         0
       ]
     },
     {
       "parameters": {
         "authentication": "privateKey",
-        "command": "={{ $('GitLab Webhook').item.json.query.project }} {{ $('GitLab Webhook').item.json.headers['x-gitlab-token'] }} {{ $('GitLab Webhook').item.json.body.ref }}",
+        "command": "={{ $json.project }} {{ $json.token }} {{ $json.ref }}",
         "cwd": "/"
       },
-      "id": "3bacf0f2-03d4-4600-a498-95948c10a833",
+      "id": "a0365430-3456-4122-9ed6-f824eef408d7",
       "name": "Run deploy on server",
       "type": "n8n-nodes-base.ssh",
       "typeVersion": 1,
       "position": [
-        500,
+        680,
         -100
       ]
     },
     {
       "parameters": {},
-      "id": "8a81141b-8b7f-4bc7-8624-b0483789ebdb",
-      "name": "Ignored (not a valid push)",
+      "id": "46123846-8000-445b-b044-7149562490e4",
+      "name": "Ignored (ping, other event or bad input)",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
       "position": [
-        500,
+        680,
         100
       ]
     }
   ],
   "connections": {
-    "GitLab Webhook": {
+    "Git Webhook": {
       "main": [
         [
           {
-            "node": "Valid GitLab push?",
+            "node": "Normalize GitLab / GitHub",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Valid GitLab push?": {
+    "Normalize GitLab / GitHub": {
+      "main": [
+        [
+          {
+            "node": "Valid push?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid push?": {
       "main": [
         [
           {
@@ -127,7 +186,7 @@
         ],
         [
           {
-            "node": "Ignored (not a valid push)",
+            "node": "Ignored (ping, other event or bad input)",
             "type": "main",
             "index": 0
           }

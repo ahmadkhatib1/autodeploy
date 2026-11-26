@@ -24,13 +24,22 @@ ask NAME "Project name (lowercase letters, digits, dashes; e.g. hisabyy)"
 valid_project_name "$NAME" || die "invalid name '$NAME'"
 [[ -f "$PROJECTS_DIR/$NAME.env" ]] && die "project '$NAME' already exists. Remove it first: autodeploy remove $NAME"
 
-ask REPO_URL "GitLab repo URL (SSH or HTTPS)"
+ask REPO_URL "Repository URL on GitLab or GitHub (SSH or HTTPS)"
 [[ -n "$REPO_URL" ]] || die "repo URL is required"
 # Convert https://host/group/repo(.git) to git@host:group/repo.git
 if [[ "$REPO_URL" =~ ^https?://([^/]+)/(.+)$ ]]; then
   REPO_URL="git@${BASH_REMATCH[1]}:${BASH_REMATCH[2]%.git}.git"
   info "using SSH URL: $REPO_URL"
 fi
+
+# github for github.com (or a host with "github" in it), gitlab for everything else.
+if [[ "$REPO_URL" =~ ^[^@]+@([^:/]+) && "${BASH_REMATCH[1]}" == *github* ]]; then
+  detected_provider="github"
+else
+  detected_provider="gitlab"
+fi
+ask GIT_PROVIDER "Git provider: gitlab or github" "$detected_provider"
+[[ "$GIT_PROVIDER" == "gitlab" || "$GIT_PROVIDER" == "github" ]] || die "GIT_PROVIDER must be gitlab or github"
 
 ask BRANCH "Branch to deploy" "main"
 ask APP_TYPE "App type: node (runs with pm2) or static (files only)" "node"
@@ -68,6 +77,7 @@ chmod 600 "$KEY"
 ENV_FILE="$PROJECTS_DIR/$NAME.env"
 umask 077
 : > "$ENV_FILE"
+write_env_var "$ENV_FILE" GIT_PROVIDER "$GIT_PROVIDER"
 write_env_var "$ENV_FILE" REPO_URL "$REPO_URL"
 write_env_var "$ENV_FILE" BRANCH "$BRANCH"
 write_env_var "$ENV_FILE" APP_TYPE "$APP_TYPE"
@@ -83,11 +93,19 @@ umask 022
 
 mkdir -p "$APPS_DIR/$NAME/shared"
 
+if [[ "$GIT_PROVIDER" == "github" ]]; then
+  PROVIDER_LABEL="GitHub"
+  KEY_WHERE="Repository > Settings > Deploy keys > Add deploy key  (leave 'Allow write access' OFF)"
+else
+  PROVIDER_LABEL="GitLab"
+  KEY_WHERE="Project > Settings > Repository > Deploy keys > Add new key  (no write access)"
+fi
+
 cat <<EOF
 
 ------------------------------------------------------------------
-STEP 1 — Add this Deploy Key in GitLab (read-only):
-  Project > Settings > Repository > Deploy keys > Add new key
+STEP 1 — Add this Deploy Key in $PROVIDER_LABEL (read-only):
+  $KEY_WHERE
   Title: autodeploy-$(hostname)
   Key:
 
@@ -101,7 +119,7 @@ if [[ "${AUTODEPLOY_NONINTERACTIVE:-}" != "1" ]]; then
     read -r -p "Press Enter after you add the key (attempt $attempt/3)… " _
     if GIT_SSH_COMMAND="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$CONFIG_DIR/known_hosts" \
        git ls-remote --heads "$REPO_URL" "$BRANCH" | grep -q .; then
-      info "GitLab access OK, branch '$BRANCH' found"
+      info "$PROVIDER_LABEL access OK, branch '$BRANCH' found"
       break
     fi
     warn "could not read branch '$BRANCH' from $REPO_URL yet"
@@ -109,17 +127,35 @@ if [[ "${AUTODEPLOY_NONINTERACTIVE:-}" != "1" ]]; then
   done
 fi
 
-WEBHOOK_URL="${WEBHOOK_BASE:-https://YOUR-N8N-HOST/webhook/deploy}?project=$NAME"
+BASE="${WEBHOOK_BASE:-https://YOUR-N8N-HOST/webhook/deploy}"
 
-cat <<EOF
+if [[ "$GIT_PROVIDER" == "github" ]]; then
+  # GitHub has no plain secret header, so the token travels in the URL (use HTTPS).
+  cat <<EOF
+
+------------------------------------------------------------------
+STEP 2 — Add the webhook in GitHub:
+  Repository > Settings > Webhooks > Add webhook
+  Payload URL:   $BASE?project=$NAME&token=$DEPLOY_TOKEN
+  Content type:  application/json
+  Secret:        (leave empty)
+  SSL verification: Enable (needs n8n on https)
+  Which events:  Just the push event
+EOF
+else
+  cat <<EOF
 
 ------------------------------------------------------------------
 STEP 2 — Add the webhook in GitLab:
   Project > Settings > Webhooks > Add new webhook
-  URL:           $WEBHOOK_URL
+  URL:           $BASE?project=$NAME
   Secret token:  $DEPLOY_TOKEN
   Trigger:       Push events  (branch filter: $BRANCH)
   SSL verification: on (if n8n uses https)
+EOF
+fi
+
+cat <<EOF
 
 STEP 3 — Put the app's secrets (if any) here, they are linked into
 every release automatically:

@@ -1,7 +1,7 @@
 {
   "name": "@ahmadkhatib/autodeploy",
-  "version": "1.0.0",
-  "description": "Self-hosted auto-deploy from GitLab to your own server with n8n: zero-downtime releases, automatic rollback, Telegram / email / WhatsApp notifications.",
+  "version": "1.1.0",
+  "description": "Self-hosted auto-deploy from GitLab or GitHub to your own server with n8n: zero-downtime releases, automatic rollback, Telegram / email / WhatsApp notifications.",
   "keywords": [
     "deploy",
     "auto-deploy",
@@ -12,7 +12,8 @@
     "pm2",
     "nextjs",
     "rollback",
-    "self-hosted"
+    "self-hosted",
+    "github"
   ],
   "homepage": "https://github.com/ahmadkhatib1/autodeploy#readme",
   "bugs": {

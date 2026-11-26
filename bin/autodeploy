@@ -33,13 +33,13 @@ case "$cmd" in
   notify-test)   exec "$SCRIPT_DIR/notify-setup.sh" --test ;;
   list)
     shopt -s nullglob
-    printf '%-20s %-10s %-8s %s\n' PROJECT BRANCH PORT LIVE
+    printf '%-20s %-8s %-10s %-8s %s\n' PROJECT SOURCE BRANCH PORT LIVE
     for f in "$PROJECTS_DIR"/*.env; do
       name="$(basename "$f" .env)"
-      ( BRANCH="" PORT=""
+      ( BRANCH="" PORT="" GIT_PROVIDER=""
         load_env_file "$f"
         live="$(readlink "$APPS_DIR/$name/current" 2>/dev/null || true)"
-        printf '%-20s %-10s %-8s %s\n' "$name" "${BRANCH:-main}" "${PORT:--}" "${live##*/}" )
+        printf '%-20s %-8s %-10s %-8s %s\n' "$name" "${GIT_PROVIDER:-gitlab}" "${BRANCH:-main}" "${PORT:--}" "${live##*/}" )
     done
     ;;
   logs)

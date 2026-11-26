@@ -8,7 +8,8 @@ Created by `autodeploy add`. Edit with `sudo -u deploy nano /opt/autodeploy/proj
 
 | Key | Default | Description |
 |---|---|---|
-| `REPO_URL` | (required) | GitLab SSH URL, e.g. `git@gitlab.com:group/app.git`. Self-hosted GitLab works too. |
+| `GIT_PROVIDER` | detected | `gitlab` or `github`. Detected from the URL (`github` if the host contains "github"); only changes the setup instructions `autodeploy add` prints. |
+| `REPO_URL` | (required) | SSH URL, e.g. `git@gitlab.com:group/app.git` or `git@github.com:me/app.git`. Self-hosted GitLab and GitHub Enterprise work too. |
 | `BRANCH` | `main` | The only branch whose pushes trigger a deploy. |
 | `APP_TYPE` | `node` | `node` = run with pm2. `static` = only build; serve `current/` with your web server. |
 | `INSTALL_CMD` | `auto` | `auto` picks `pnpm install --frozen-lockfile`, `yarn install`, `bun install`, `npm ci` or `npm install` from the lockfile. `none` skips the step. |
@@ -21,7 +22,7 @@ Created by `autodeploy add`. Edit with `sudo -u deploy nano /opt/autodeploy/proj
 | `SHARED_PATHS` | `.env .env.local .env.production` | Files or folders in `apps/<name>/shared/` that are symlinked into each release (e.g. add `uploads`). |
 | `PM2_NAME` | project name | pm2 process name. |
 | `NOTIFY_CHANNELS` | server default | Override channels for this project, e.g. `telegram` or `email whatsapp`. |
-| `DEPLOY_TOKEN` | generated | Must match the GitLab webhook "Secret token". |
+| `DEPLOY_TOKEN` | generated | GitLab: the webhook "Secret token". GitHub: the `token=` value in the webhook URL. |
 
 ### Examples
 
@@ -84,7 +85,7 @@ NAME=hisabyy REPO_URL=git@gitlab.com:me/hisabyy.git PORT=3001 autodeploy add
 ├── bin/  lib/           scripts
 ├── config/              notify.env, server.env, known_hosts
 ├── projects/<name>.env  project settings + token
-├── keys/<name>          GitLab deploy keys
+├── keys/<name>          deploy keys (GitLab / GitHub)
 ├── apps/<name>/
 │   ├── current -> releases/<live>
 │   ├── releases/        last N releases

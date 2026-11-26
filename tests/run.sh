@@ -117,6 +117,38 @@ check "pm2 not used for static"    bash -c '! grep -q "apps/site" "'"$T"'/pm2.lo
 echo "add-project guards"
 check "duplicate port refused"     bash -c '! NAME=other REPO_URL=x PORT='"$PORT_A"' "'"$B"'/add-project.sh" >/dev/null 2>&1'
 check "https URL converted to ssh" bash -c 'NAME=conv REPO_URL=https://gitlab.com/a/b.git PORT=1234 "'"$B"'/add-project.sh" 2>&1 | grep -q "git@gitlab.com:a/b.git"'
+check "gitlab detected for gitlab.com"  grep -q "^GIT_PROVIDER='gitlab'" "$AUTODEPLOY_HOME/projects/conv.env"
+
+echo "github projects"
+gh_out="$(NAME=gh REPO_URL=https://github.com/me/app PORT=1235 "$B/add-project.sh" 2>&1)"
+check "github detected from URL"       grep -q "^GIT_PROVIDER='github'" "$AUTODEPLOY_HOME/projects/gh.env"
+check "github ssh URL"                 grep -q "^REPO_URL='git@github.com:me/app.git'" "$AUTODEPLOY_HOME/projects/gh.env"
+check "github deploy-key instructions" grep -q "Add deploy key" <<<"$gh_out"
+check "github webhook URL has token"   grep -qE "webhook/deploy\?project=gh&token=[a-f0-9]{48}" <<<"$gh_out"
+check "github webhook uses JSON"       grep -q "application/json" <<<"$gh_out"
+# (its first deploy fails because the repo doesn't exist; only the saved provider matters)
+NAME=forced REPO_URL=git@code.example.com:a/b.git GIT_PROVIDER=github PORT=1236 "$B/add-project.sh" >/dev/null 2>&1
+check "provider can be forced"         grep -q "^GIT_PROVIDER='github'" "$AUTODEPLOY_HOME/projects/forced.env"
+check "bad provider refused"           bash -c '! NAME=badp REPO_URL=x GIT_PROVIDER=bitbucket PORT=1237 "'"$B"'/add-project.sh" >/dev/null 2>&1'
+GH_TOK="$(sed -n "s/^DEPLOY_TOKEN='\(.*\)'$/\1/p" "$AUTODEPLOY_HOME/projects/gh.env")"
+check "github token accepted by trigger" bash -c '[[ "$(SSH_ORIGINAL_COMMAND="gh '"$GH_TOK"' refs/heads/dev" "'"$B"'/trigger.sh")" == SKIP* ]]'
+
+echo "n8n workflow"
+WF="$ROOT/n8n/workflow.json"
+check "workflow is valid JSON"         jq -e . "$WF" >/dev/null
+check "normalize handles both providers" node -e '
+  const wf=require(process.argv[1]);
+  const set=wf.nodes.find(n=>n.type==="n8n-nodes-base.set").parameters.assignments.assignments;
+  const ev=(e,$json)=>Function("$json","return "+e.replace(/^=\{\{ /,"").replace(/ \}\}$/,""))($json);
+  const run=j=>Object.fromEntries(set.map(a=>[a.name,ev(a.value,j)]));
+  const t="abcdefabcdefabcdef12";
+  const gl=run({headers:{"x-gitlab-event":"Push Hook","x-gitlab-token":t},query:{project:"a"},body:{ref:"refs/heads/main"}});
+  const gh=run({headers:{"x-github-event":"push"},query:{project:"b",token:t},body:{ref:"refs/heads/main"}});
+  const form=run({headers:{"x-github-event":"push"},query:{project:"b",token:t},body:{payload:JSON.stringify({ref:"refs/heads/x"})}});
+  const ping=run({headers:{"x-github-event":"ping"},query:{project:"b"},body:{}});
+  const ok=gl.provider==="gitlab"&&gl.is_push&&gl.token===t&&gh.provider==="github"&&gh.is_push&&gh.token===t
+         &&form.ref==="refs/heads/x"&&ping.is_push===false;
+  process.exit(ok?0:1);' "$WF"
 
 echo "notification requests"
 mkdir -p "$T/curlstub"
