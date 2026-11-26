@@ -14,7 +14,9 @@ Usage: autodeploy <command> [args]
   add                       Register a new project (interactive)
   list                      Show projects and their live release
   deploy <project>          Deploy now (even if nothing changed)
+  deploy <project> --dry-run  Script projects: run the script with --dry-run
   rollback <project> [rel]  Go back to the previous (or a given) release
+  allow-sudo <project>      Script projects: let deploy run that script as root (run as root)
   logs <project>            Show the latest deploy log
   remove <project>          Unregister a project (keeps its files)
   notify-setup              Choose / change notification channels
@@ -26,9 +28,37 @@ EOF
 cmd="${1:-}"; shift || true
 
 case "$cmd" in
-  add)           exec "$SCRIPT_DIR/add-project.sh" "$@" ;;
-  deploy)        exec "$SCRIPT_DIR/deploy.sh" "${1:-}" --force ;;
+  add)
+    if [[ $EUID -ne 0 || -n "${AUTODEPLOY_ALLOW_ROOT:-}" ]]; then
+      exec "$SCRIPT_DIR/add-project.sh" "$@"
+    fi
+    # As root: register the project as the deploy user, then do the root-only
+    # part (sudo rule) for script projects that run as root.
+    result="$(mktemp)"
+    trap 'rm -f "$result"' EXIT
+    chown "$AUTODEPLOY_USER" "$result"
+    sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" AUTODEPLOY_RESULT_FILE="$result" \
+      "$SCRIPT_DIR/add-project.sh" "$@"
+    name="$(head -n 1 "$result")"
+    valid_project_name "$name" || exit 0
+    ( APP_TYPE="" DEPLOY_AS_ROOT=""
+      load_env_file "$PROJECTS_DIR/$name.env"
+      [[ "$APP_TYPE" == "script" && "$DEPLOY_AS_ROOT" == "yes" ]] ) || exit 0
+    echo
+    info "Setting up sudo for '$name'"
+    if ! "$SCRIPT_DIR/allow-sudo.sh" "$name"; then
+      warn "sudo is not set up yet. Fix the problem above, then run: sudo autodeploy allow-sudo $name"
+      exit 1
+    fi
+    if ask_yes_no "Run a dry run of the script now?" "y"; then
+      sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$SCRIPT_DIR/deploy.sh" "$name" --dry-run || true
+    fi
+    ;;
+  deploy)
+    name="${1:-}"; shift || true
+    exec "$SCRIPT_DIR/deploy.sh" "$name" --force "$@" ;;
   rollback)      exec "$SCRIPT_DIR/rollback.sh" "$@" ;;
+  allow-sudo)    exec "$SCRIPT_DIR/allow-sudo.sh" "$@" ;;
   notify-setup)  exec "$SCRIPT_DIR/notify-setup.sh" ;;
   notify-test)   exec "$SCRIPT_DIR/notify-setup.sh" --test ;;
   list)
@@ -55,7 +85,15 @@ case "$cmd" in
     valid_project_name "$name" || die "usage: autodeploy remove <project>"
     [[ -f "$PROJECTS_DIR/$name.env" ]] || die "project '$name' not found"
     if [[ $EUID -eq 0 ]]; then
-      exec sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$0" remove "$name"
+      sudoers_file="${SUDOERS_DIR:-/etc/sudoers.d}/autodeploy-$name"
+      if [[ -f "$sudoers_file" ]]; then
+        mkdir -p "$AUTODEPLOY_HOME/removed"
+        mv "$sudoers_file" "$AUTODEPLOY_HOME/removed/sudoers-$name.$(date +%Y%m%d-%H%M%S)"
+        info "sudo rule for '$name' disabled"
+      fi
+      if [[ -z "${AUTODEPLOY_ALLOW_ROOT:-}" ]]; then
+        exec sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$0" remove "$name"
+      fi
     fi
     pm2 delete "$name" >/dev/null 2>&1 && pm2 save >/dev/null 2>&1 || true
     mkdir -p "$AUTODEPLOY_HOME/removed"
@@ -64,7 +102,7 @@ case "$cmd" in
     [[ -f "$KEYS_DIR/$name" ]] && mv "$KEYS_DIR/$name" "$AUTODEPLOY_HOME/removed/$name.$stamp.key"
     [[ -f "$KEYS_DIR/$name.pub" ]] && mv "$KEYS_DIR/$name.pub" "$AUTODEPLOY_HOME/removed/$name.$stamp.key.pub"
     info "removed '$name'. Its files stay in $APPS_DIR/$name — delete that folder yourself if you no longer need it."
-    info "Also delete the webhook and deploy key in GitLab."
+    info "Also delete the webhook and deploy key in GitLab / GitHub."
     ;;
   info)
     load_env_file "$CONFIG_DIR/server.env" || true

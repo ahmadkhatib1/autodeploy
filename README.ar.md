@@ -77,7 +77,7 @@ autodeploy add
 | رابط المستودع | `git@gitlab.com:you/hisabyy.git` أو `https://github.com/you/site` (روابط https تُحوَّل تلقائياً) |
 | المنصة | `gitlab` أو `github` (تُكتشف من الرابط) |
 | الفرع | `main` |
-| النوع | `node` (يعمل بـpm2) أو `static` (ملفات فقط) |
+| النوع | `node` (يعمل بـpm2)، أو `static` (ملفات فقط)، أو `script` (سكربت نشر خاص بك، انظر القسم 4ب) |
 | أمر التثبيت | `auto` (يكتشف npm / pnpm / yarn / bun) |
 | أمر البناء | `npm run build` |
 | أمر التشغيل | `npm start` |
@@ -116,12 +116,65 @@ sudo -u deploy nano /opt/autodeploy/apps/hisabyy/shared/.env
 
 بعدها جرّب: ادفع commit، أو من GitLab اضغط **Test ← Push events** على الـwebhook. أما GitHub فيرسل رسالة ping عند إنشاء الـwebhook، وn8n يتجاهلها، وأول push بعدها يبدأ النشر.
 
+## 4ب) خيار: سكربت نشر خاص بك (Docker Compose، ترحيلات، نسخ احتياطي)
+
+إذا كان مشروعك يحتاج أكثر من "تثبيت ← بناء ← تشغيل"، مثل مشروع يعمل بـ`docker compose`، أو يحتاج نسخة احتياطية وترحيلات قاعدة بيانات قبل كل نشر، فاختر النوع **`script`**. تبقى autodeploy مسؤولة عن الـwebhook والتحقق والقفل والسجل والإشعارات، لكنها تشغّل **سكربتك أنت** بدل البناء الخاص بها، وتشغّله كـroot عند الحاجة عبر قاعدة sudo محصورة بهذا الملف فقط.
+
+**شروط السكربت:**
+
+| | |
+|---|---|
+| النشر | يُستدعى **بدون وسائط** |
+| التجربة الجافة | يُستدعى بـ **`--dry-run`**: يعرض الخطة ولا يغيّر شيئاً |
+| النتيجة | الخروج بـ **0** = نجح النشر؛ أي رمز آخر = فشل، وآخر 25 سطراً من مخرجاته تصلك في إشعار ❌ |
+| المسؤولية | السكربت نفسه يسحب الكود ويبني ويرحّل ويعيد التشغيل، **ويرجع بنفسه** عند الفشل |
+| المتغيرات | عبر sudo لا يصله أي متغير بيئة، فاجعل إعداداته داخله |
+
+> إذا كان سكربتك الحالي يقرأ `DRY_RUN=1` من البيئة، يكفي أن تضيف في أوله:
+> `[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1`
+
+**الخطوات:**
+
+1. ضع السكربت في المستودع (مثلاً `deploy/auto-deploy.sh`)، واسحبه على السيرفر، ثم اجعله مملوكاً لـroot ولا يعدّله غيره:
+   ```bash
+   cd /opt/myapp && git pull --ff-only
+   sudo chown root:root deploy/auto-deploy.sh
+   sudo chmod 750 deploy/auto-deploy.sh
+   ```
+2. سجّل المشروع بـ `sudo autodeploy add` واختر:
+
+   | السؤال | الجواب |
+   |---|---|
+   | App type | **`script`** |
+   | Deploy script | `/opt/myapp/deploy/auto-deploy.sh` |
+   | Run it as root through sudo? | `yes` (لـDocker والنسخ الاحتياطي…) أو `no` |
+   | Rollback script | مسار سكربت رجوع، أو `none` |
+   | Healthcheck URL | اختياري، فحص إضافي بعد نجاح السكربت |
+
+   ولأنك شغّلته بـsudo، يقوم بأمرين تلقائياً:
+   - **ينشئ قاعدة sudo** في `/etc/sudoers.d/autodeploy-myapp`، بعد أن يتأكد أن السكربت ملف عادي مملوك لـroot، ولا يستطيع غيره تعديله ولا تعديل المجلدات التي فوقه. القاعدة تسمح فقط بتشغيل السكربت بدون وسائط أو بـ`--dry-run`، ولا شيء غير ذلك. إن غيّرت الصلاحيات لاحقاً نفّذ: `sudo autodeploy allow-sudo myapp`.
+   - **يعرض عليك تجربة جافة** فوراً.
+3. أضف مفتاح Deploy key والـwebhook في GitLab أو GitHub كأي مشروع آخر.
+4. جرّب:
+   ```bash
+   autodeploy deploy myapp --dry-run   # يشغّل سكربتك بـ --dry-run
+   autodeploy deploy myapp             # نشر فعلي الآن
+   ```
+
+**الرجوع:** لا توجد نسخ محفوظة عند autodeploy في هذا النوع. لذلك `autodeploy rollback myapp` يشغّل `ROLLBACK_SCRIPT` إن حدّدته، وإلا يوضّح لك أن الرجوع مسؤولية سكربتك، أو أن تستخدم `git revert` ثم push.
+
+**تنبيه أمني:** عندما يعمل السكربت كـroot ويأتي من المستودع نفسه، فإن **أي شخص يستطيع الدفع إلى الفرع المنشور يملك عملياً صلاحية root على السيرفر**. احمِ الفرع في GitLab أو GitHub، وحدّد من يملك صلاحية الدفع، أو انشر من فرع مخصص مثل `production`. وعند `autodeploy remove` تُلغى قاعدة sudo تلقائياً.
+
+قالب جاهز لـDocker Compose: [`examples/deploy-script-template.sh`](examples/deploy-script-template.sh)، والدليل الكامل بالإنجليزية: [docs/custom-script.md](docs/custom-script.md).
+
 ## 5) الأوامر
 
 ```bash
 autodeploy list                    # المشاريع والنسخة الحالية لكل منها
 autodeploy deploy hisabyy          # نشر يدوي الآن
+autodeploy deploy hisabyy --dry-run      # لمشاريع script: عرض الخطة فقط
 autodeploy rollback hisabyy        # الرجوع للنسخة السابقة
+sudo autodeploy allow-sudo hisabyy       # لمشاريع script: إنشاء قاعدة sudo من جديد
 autodeploy logs hisabyy            # آخر سجل نشر
 autodeploy remove hisabyy          # إلغاء تسجيل مشروع (الملفات تبقى)
 autodeploy notify-setup            # تغيير قنوات الإشعارات
@@ -184,6 +237,7 @@ autodeploy info                    # المسارات ورابط الـwebhook
 ## مراجع إضافية
 
 - [كل إعدادات المشروع](docs/configuration.md)
+- [سكربت النشر الخاص (APP_TYPE=script)](docs/custom-script.md)
 - [كيف تعمل الأداة والأمان](docs/how-it-works.md)
 - [إعداد الإشعارات بالتفصيل](docs/notifications.md)
 

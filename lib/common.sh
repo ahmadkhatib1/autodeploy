@@ -14,6 +14,8 @@ PROJECT_RE='^[a-z0-9][a-z0-9-]{0,39}$'
 TOKEN_RE='^[A-Za-z0-9]{16,128}$'
 REF_RE='^refs/heads/[A-Za-z0-9._/-]{1,100}$'
 
+SCRIPT_PATH_RE='^/[A-Za-z0-9._/-]+$'
+
 die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 warn() { echo "WARN: $*" >&2; }
@@ -79,6 +81,17 @@ ask_yes_no() {
   read -r -p "$question [$( [[ $default == y ]] && echo Y/n || echo y/N )]: " answer
   answer="${answer:-$default}"
   [[ "$answer" =~ ^[Yy] ]]
+}
+
+# For APP_TYPE=script: put the command that runs <script> [args] into the
+# SCRIPT_RUN array, through "sudo -n" when DEPLOY_AS_ROOT=yes.
+build_script_cmd() {
+  local script="$1"; shift
+  if [[ "${DEPLOY_AS_ROOT:-no}" == "yes" ]]; then
+    SCRIPT_RUN=(sudo -n "$script" "$@")
+  else
+    SCRIPT_RUN=("$script" "$@")
+  fi
 }
 
 random_token() {

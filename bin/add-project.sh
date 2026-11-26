@@ -42,12 +42,38 @@ ask GIT_PROVIDER "Git provider: gitlab or github" "$detected_provider"
 [[ "$GIT_PROVIDER" == "gitlab" || "$GIT_PROVIDER" == "github" ]] || die "GIT_PROVIDER must be gitlab or github"
 
 ask BRANCH "Branch to deploy" "main"
-ask APP_TYPE "App type: node (runs with pm2) or static (files only)" "node"
-[[ "$APP_TYPE" == "node" || "$APP_TYPE" == "static" ]] || die "APP_TYPE must be node or static"
-ask INSTALL_CMD "Install command ('auto' detects npm/pnpm/yarn/bun)" "auto"
-ask BUILD_CMD "Build command ('none' to skip)" "npm run build"
+echo "App types:"
+echo "  node    build here and keep it running with pm2"
+echo "  static  build here, files only (served by Nginx/Caddy)"
+echo "  script  your own deploy script does everything (Docker Compose, migrations, backups…)"
+ask APP_TYPE "App type" "node"
+[[ "$APP_TYPE" == "node" || "$APP_TYPE" == "static" || "$APP_TYPE" == "script" ]] || die "APP_TYPE must be node, static or script"
 
-if [[ "$APP_TYPE" == "node" ]]; then
+DEPLOY_SCRIPT="${DEPLOY_SCRIPT:-}"
+DEPLOY_AS_ROOT="${DEPLOY_AS_ROOT:-}"
+ROLLBACK_SCRIPT="${ROLLBACK_SCRIPT:-}"
+if [[ "$APP_TYPE" == "script" ]]; then
+  ask DEPLOY_SCRIPT "Absolute path of the deploy script on this server (e.g. /opt/myapp/deploy/auto-deploy.sh)"
+  [[ "$DEPLOY_SCRIPT" =~ $SCRIPT_PATH_RE ]] || die "the script path must be absolute and use only letters, digits, . _ - /"
+  ask DEPLOY_AS_ROOT "Run it as root through sudo? (yes/no)" "yes"
+  [[ "$DEPLOY_AS_ROOT" == "yes" || "$DEPLOY_AS_ROOT" == "no" ]] || die "answer yes or no"
+  ask ROLLBACK_SCRIPT "Rollback script for 'autodeploy rollback' ('none' if you don't have one)" "none"
+  [[ "$ROLLBACK_SCRIPT" == "none" ]] && ROLLBACK_SCRIPT=""
+  [[ -z "$ROLLBACK_SCRIPT" || "$ROLLBACK_SCRIPT" =~ $SCRIPT_PATH_RE ]] || die "the rollback script path must be absolute"
+  INSTALL_CMD="none"
+  BUILD_CMD="none"
+  START_CMD="none"
+  PORT=""
+  ask HEALTHCHECK_URL "Healthcheck URL checked after the script succeeds ('none' to skip)" "none"
+  [[ "$HEALTHCHECK_URL" == "none" ]] && HEALTHCHECK_URL=""
+else
+  ask INSTALL_CMD "Install command ('auto' detects npm/pnpm/yarn/bun)" "auto"
+  ask BUILD_CMD "Build command ('none' to skip)" "npm run build"
+fi
+
+if [[ "$APP_TYPE" == "script" ]]; then
+  :
+elif [[ "$APP_TYPE" == "node" ]]; then
   ask START_CMD "Start command" "npm start"
   ask PORT "Port the app listens on" "3000"
   [[ "$PORT" =~ ^[0-9]{2,5}$ ]] || die "invalid port '$PORT'"
@@ -81,17 +107,24 @@ write_env_var "$ENV_FILE" GIT_PROVIDER "$GIT_PROVIDER"
 write_env_var "$ENV_FILE" REPO_URL "$REPO_URL"
 write_env_var "$ENV_FILE" BRANCH "$BRANCH"
 write_env_var "$ENV_FILE" APP_TYPE "$APP_TYPE"
-write_env_var "$ENV_FILE" INSTALL_CMD "$INSTALL_CMD"
-write_env_var "$ENV_FILE" BUILD_CMD "$BUILD_CMD"
-write_env_var "$ENV_FILE" START_CMD "$START_CMD"
-[[ -n "$PORT" ]] && write_env_var "$ENV_FILE" PORT "$PORT"
+if [[ "$APP_TYPE" == "script" ]]; then
+  write_env_var "$ENV_FILE" DEPLOY_SCRIPT "$DEPLOY_SCRIPT"
+  write_env_var "$ENV_FILE" DEPLOY_AS_ROOT "$DEPLOY_AS_ROOT"
+  write_env_var "$ENV_FILE" ROLLBACK_SCRIPT "$ROLLBACK_SCRIPT"
+else
+  write_env_var "$ENV_FILE" INSTALL_CMD "$INSTALL_CMD"
+  write_env_var "$ENV_FILE" BUILD_CMD "$BUILD_CMD"
+  write_env_var "$ENV_FILE" START_CMD "$START_CMD"
+  [[ -n "$PORT" ]] && write_env_var "$ENV_FILE" PORT "$PORT"
+  write_env_var "$ENV_FILE" KEEP_RELEASES "5"
+fi
 write_env_var "$ENV_FILE" HEALTHCHECK_URL "$HEALTHCHECK_URL"
 [[ -n "$NOTIFY_CHANNELS" ]] && write_env_var "$ENV_FILE" NOTIFY_CHANNELS "$NOTIFY_CHANNELS"
-write_env_var "$ENV_FILE" KEEP_RELEASES "5"
 write_env_var "$ENV_FILE" DEPLOY_TOKEN "$DEPLOY_TOKEN"
 umask 022
 
-mkdir -p "$APPS_DIR/$NAME/shared"
+mkdir -p "$APPS_DIR/$NAME"
+[[ "$APP_TYPE" == "script" ]] || mkdir -p "$APPS_DIR/$NAME/shared"
 
 if [[ "$GIT_PROVIDER" == "github" ]]; then
   PROVIDER_LABEL="GitHub"
@@ -153,6 +186,32 @@ STEP 2 — Add the webhook in GitLab:
   Trigger:       Push events  (branch filter: $BRANCH)
   SSL verification: on (if n8n uses https)
 EOF
+fi
+
+[[ -n "${AUTODEPLOY_RESULT_FILE:-}" ]] && printf '%s\n' "$NAME" > "$AUTODEPLOY_RESULT_FILE"
+
+if [[ "$APP_TYPE" == "script" ]]; then
+  sudo_step=""
+  if [[ "$DEPLOY_AS_ROOT" == "yes" ]]; then
+    sudo_step="
+STEP 3 — Allow the deploy user to run ONLY this script as root
+  (done for you when you run 'sudo autodeploy add'):
+    sudo autodeploy allow-sudo $NAME
+"
+  fi
+  cat <<EOF
+$sudo_step
+STEP 4 — Dry run (your script receives --dry-run and should change nothing):
+    autodeploy deploy $NAME --dry-run
+
+Then push to '$BRANCH'. Your script contract:
+  - exit 0 = deployed, anything else = failed (its output goes in the notification)
+  - it pulls the code, builds, migrates and rolls back by itself
+------------------------------------------------------------------
+
+Project '$NAME' is registered.
+EOF
+  exit 0
 fi
 
 cat <<EOF

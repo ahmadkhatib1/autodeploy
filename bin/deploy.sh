@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build and release one project.
-# Usage: deploy.sh <project> [--force]
-#   --force  deploy even if the commit is already live
+# Usage: deploy.sh <project> [--force] [--dry-run]
+#   --force    deploy even if the commit is already live
+#   --dry-run  (APP_TYPE=script only) run the project's script with --dry-run
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -14,13 +15,26 @@ source "$LIB_DIR/notify.sh"
 ensure_deploy_user "$@"
 
 NAME="${1:-}"
-FORCE="${2:-}"
-valid_project_name "$NAME" || die "usage: deploy.sh <project> [--force]"
+shift || true
+FORCE=""
+DRY_RUN=0
+for opt in "$@"; do
+  case "$opt" in
+    --force)   FORCE="--force" ;;
+    --dry-run) DRY_RUN=1 ;;
+    *) die "unknown option '$opt'" ;;
+  esac
+done
+valid_project_name "$NAME" || die "usage: deploy.sh <project> [--force] [--dry-run]"
 
 load_env_file "$CONFIG_DIR/notify.env" || true
 load_env_file "$PROJECTS_DIR/$NAME.env" || die "project '$NAME' not found ($PROJECTS_DIR/$NAME.env)"
 
 : "${REPO_URL:?REPO_URL missing in $NAME.env}"
+APP_TYPE="${APP_TYPE:-node}"
+if (( DRY_RUN )) && [[ "$APP_TYPE" != "script" ]]; then
+  die "--dry-run is only available for projects with APP_TYPE=script"
+fi
 BRANCH="${BRANCH:-main}"
 INSTALL_CMD="${INSTALL_CMD:-auto}"
 BUILD_CMD="${BUILD_CMD-npm run build}"
@@ -38,7 +52,8 @@ RELEASES_DIR="$APP_DIR/releases"
 SHARED_DIR="$APP_DIR/shared"
 CURRENT="$APP_DIR/current"
 
-mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$LOGS_DIR/$NAME" "$LOCKS_DIR"
+mkdir -p "$APP_DIR" "$LOGS_DIR/$NAME" "$LOCKS_DIR"
+[[ "$APP_TYPE" == "script" ]] || mkdir -p "$RELEASES_DIR" "$SHARED_DIR"
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_FILE="$LOGS_DIR/$NAME/$STAMP.log"
@@ -169,6 +184,70 @@ COMMIT_SHORT="${COMMIT:0:8}"
 COMMIT_MSG="$(git -C "$REPO_CACHE" log -1 --format=%s "$COMMIT")"
 COMMIT_AUTHOR="$(git -C "$REPO_CACHE" log -1 --format=%an "$COMMIT")"
 info "commit $COMMIT_SHORT: $COMMIT_MSG"
+
+# ---------------------------------------------------------------- script mode
+# The project's own script does the whole deploy (pull, build, migrate,
+# restart, rollback). autodeploy runs it, logs it and reports the result.
+if [[ "$APP_TYPE" == "script" ]]; then
+  trap - ERR
+  [[ "${DEPLOY_SCRIPT:-}" =~ $SCRIPT_PATH_RE ]] || die "DEPLOY_SCRIPT must be an absolute path (got '${DEPLOY_SCRIPT:-}')"
+  script_args=()
+  (( DRY_RUN )) && script_args=(--dry-run)
+  build_script_cmd "$DEPLOY_SCRIPT" "${script_args[@]}"
+  STEP="سكربت النشر"
+
+  sudo_hint=""
+  if [[ "${DEPLOY_AS_ROOT:-no}" == "yes" ]] && ! sudo -n -l "${SCRIPT_RUN[@]:2}" >/dev/null 2>&1; then
+    echo "!! sudo is not allowed for: ${SCRIPT_RUN[*]:2}"
+    sudo_hint="لم يُسمح بعد لمستخدم deploy بتشغيل السكربت عبر sudo. نفّذ على السيرفر: sudo autodeploy allow-sudo $NAME"
+    code=126
+  else
+    info "running: ${SCRIPT_RUN[*]}"
+    set +e
+    AUTODEPLOY_PROJECT="$NAME" AUTODEPLOY_BRANCH="$BRANCH" AUTODEPLOY_COMMIT="$COMMIT" "${SCRIPT_RUN[@]}"
+    code=$?
+    set -e
+  fi
+
+  if (( DRY_RUN )); then
+    info "dry run finished (exit $code)"
+    [[ -n "$sudo_hint" ]] && echo "$sudo_hint"
+    exit "$code"
+  fi
+
+  if (( code == 0 )); then
+    STEP="فحص الموقع"
+    healthcheck || code=97
+  fi
+
+  if (( code == 0 )); then
+    info "done in $(elapsed)"
+    notify "✅ تم نشر $NAME" "$(commit_lines)
+المدة: $(elapsed)"
+    exit 0
+  fi
+
+  if [[ -n "$sudo_hint" ]]; then
+    reason="$sudo_hint"
+  elif (( code == 97 )); then
+    reason="السكربت انتهى بنجاح لكن فحص الموقع فشل ($HEALTHCHECK_URL)."
+  else
+    reason="سكربت النشر انتهى بخطأ (exit $code)."
+  fi
+  rollback_note="الرجوع وحالة الموقع يتولاهما سكربت المشروع نفسه، فالسطور أدناه هي المرجع."
+  [[ -n "${ROLLBACK_SCRIPT:-}" ]] && rollback_note="$rollback_note
+للرجوع يدوياً: autodeploy rollback $NAME"
+  notify "❌ فشل نشر $NAME" "$(commit_lines)
+$reason
+المدة: $(elapsed)
+$rollback_note
+
+آخر سطور السجل:
+$(tail -n 25 "$LOG_FILE" 2>/dev/null)
+
+السجل الكامل على السيرفر: $LOG_FILE"
+  exit "$code"
+fi
 
 if [[ -L "$CURRENT" ]]; then
   PREVIOUS="$(readlink -f "$CURRENT")"

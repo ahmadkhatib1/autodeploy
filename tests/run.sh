@@ -116,7 +116,8 @@ check "pm2 not used for static"    bash -c '! grep -q "apps/site" "'"$T"'/pm2.lo
 
 echo "add-project guards"
 check "duplicate port refused"     bash -c '! NAME=other REPO_URL=x PORT='"$PORT_A"' "'"$B"'/add-project.sh" >/dev/null 2>&1'
-check "https URL converted to ssh" bash -c 'NAME=conv REPO_URL=https://gitlab.com/a/b.git PORT=1234 "'"$B"'/add-project.sh" 2>&1 | grep -q "git@gitlab.com:a/b.git"'
+conv_out="$(NAME=conv REPO_URL=https://gitlab.com/a/b.git PORT=1234 "$B/add-project.sh" 2>&1)"
+check "https URL converted to ssh"     grep -q "git@gitlab.com:a/b.git" <<<"$conv_out"
 check "gitlab detected for gitlab.com"  grep -q "^GIT_PROVIDER='gitlab'" "$AUTODEPLOY_HOME/projects/conv.env"
 
 echo "github projects"
@@ -149,6 +150,94 @@ check "normalize handles both providers" node -e '
   const ok=gl.provider==="gitlab"&&gl.is_push&&gl.token===t&&gh.provider==="github"&&gh.is_push&&gh.token===t
          &&form.ref==="refs/heads/x"&&ping.is_push===false;
   process.exit(ok?0:1);' "$WF"
+
+echo "script projects"
+mkdir -p "$T/scripts"
+cat > "$T/scripts/deploy.sh" <<EOF
+#!/usr/bin/env bash
+echo "args=[\$*] project=\$AUTODEPLOY_PROJECT branch=\$AUTODEPLOY_BRANCH commit=\${AUTODEPLOY_COMMIT:0:7}" >> "$T/script-calls.log"
+echo "custom deploy output line"
+exit \${FAKE_EXIT:-0}
+EOF
+cat > "$T/scripts/rollback.sh" <<EOF
+#!/usr/bin/env bash
+echo "rollback called" >> "$T/script-calls.log"
+EOF
+chmod 755 "$T/scripts/"*.sh
+NAME=dock REPO_URL="$T/repo.git" APP_TYPE=script DEPLOY_SCRIPT="$T/scripts/deploy.sh" DEPLOY_AS_ROOT=no \
+  ROLLBACK_SCRIPT=none HEALTHCHECK_URL=none NOTIFY_CHANNELS=telegram "$B/add-project.sh" >"$T/add-script.out" 2>&1
+SP="$AUTODEPLOY_HOME/projects/dock.env"
+check "script project saved"           grep -q "^APP_TYPE='script'" "$SP"
+check "script path saved"              grep -q "^DEPLOY_SCRIPT='$T/scripts/deploy.sh'" "$SP"
+check "no build settings for script"   bash -c '! grep -qE "^(BUILD_CMD|START_CMD|PORT)=" "'"$SP"'"'
+check "add prints dry-run step"        grep -q "autodeploy deploy dock --dry-run" "$T/add-script.out"
+check "no first deploy for script"     [ ! -e "$T/script-calls.log" ]
+
+"$B/autodeploy" deploy dock --dry-run >/dev/null 2>&1; code=$?
+check "dry run exits 0"                [ "$code" = 0 ]
+check "dry run passes --dry-run"       grep -q "args=\[--dry-run\]" "$T/script-calls.log"
+check "dry run sends no notification"  bash -c '! grep -q "^\[notify" "$(ls -t "'"$AUTODEPLOY_HOME"'/logs/dock"/2*.log | head -n1)"'
+
+"$B/autodeploy" deploy dock >/dev/null 2>&1; code=$?
+check "script deploy succeeds"         [ "$code" = 0 ]
+check "script gets project/branch/commit" grep -qE "args=\[\] project=dock branch=main commit=[0-9a-f]{7}" "$T/script-calls.log"
+check "success notified"               grep -q '\[notify:telegram\] ✅ تم نشر dock' "$(lastlog dock)"
+check "no release folders for script"  [ ! -d "$AUTODEPLOY_HOME/apps/dock/releases" ]
+
+FAKE_EXIT=5 "$B/deploy.sh" dock >/dev/null 2>&1; code=$?
+check "script failure exit code kept"  [ "$code" = 5 ]
+check "failure says script failed"     grep -q 'سكربت النشر انتهى بخطأ (exit 5)' "$(lastlog dock)"
+check "failure has no misleading text" bash -c '! grep -q "لم يتغير شيء" "$(ls -t "'"$AUTODEPLOY_HOME"'/logs/dock"/2*.log | head -n1)"'
+check "script output in notification"  grep -q 'custom deploy output line' "$(lastlog dock)"
+
+sed -i "s|^HEALTHCHECK_URL=.*|HEALTHCHECK_URL='http://127.0.0.1:1'|" "$SP"; echo "HEALTHCHECK_TIMEOUT='3'" >> "$SP"
+"$B/deploy.sh" dock >/dev/null 2>&1; code=$?
+check "healthcheck failure after script" [ "$code" = 97 ] && grep -q 'فحص الموقع فشل' "$(lastlog dock)"
+sed -i "s|^HEALTHCHECK_URL=.*|HEALTHCHECK_URL=''|" "$SP"
+
+check "rollback without script explains" bash -c '"'"$B"'/rollback.sh" dock 2>&1 | grep -q "ROLLBACK_SCRIPT"'
+sed -i "s|^ROLLBACK_SCRIPT=.*|ROLLBACK_SCRIPT='$T/scripts/rollback.sh'|" "$SP"
+"$B/rollback.sh" dock >/dev/null 2>&1; code=$?
+check "rollback script runs"           [ "$code" = 0 ] && grep -q "rollback called" "$T/script-calls.log"
+check "dry run refused for node apps"  bash -c '! "'"$B"'/deploy.sh" demo --dry-run >/dev/null 2>&1'
+
+echo "script projects run as root"
+cat > "$T/stub/sudo" <<EOF
+#!/usr/bin/env bash
+[[ "\$1" == -n && "\$2" == -l ]] && exit 1
+exit 0
+EOF
+chmod +x "$T/stub/sudo"
+sed -i "s|^DEPLOY_AS_ROOT=.*|DEPLOY_AS_ROOT='yes'|" "$SP"
+"$B/deploy.sh" dock >/dev/null 2>&1; code=$?
+check "missing sudo rule detected"     [ "$code" = 126 ] && grep -q 'autodeploy allow-sudo dock' "$(lastlog dock)"
+rm -f "$T/stub/sudo"
+
+if [ "$(id -u)" = 0 ]; then
+  echo "allow-sudo (root)"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/stub/visudo"; chmod +x "$T/stub/visudo"
+  export SUDOERS_DIR="$T/sudoers"
+  chmod 750 "$T/scripts/deploy.sh" "$T/scripts/rollback.sh"; chmod 755 "$T/scripts"
+  AUTODEPLOY_USER="$(id -un)" "$B/allow-sudo.sh" dock >/dev/null 2>&1; code=$?
+  check "sudo rule written"            [ "$code" = 0 ] && [ -f "$SUDOERS_DIR/autodeploy-dock" ]
+  check "rule allows only exact commands" grep -qF "$T/scripts/deploy.sh \"\", $T/scripts/deploy.sh --dry-run" "$SUDOERS_DIR/autodeploy-dock"
+  check "rule includes rollback script" grep -qF "$T/scripts/rollback.sh \"\"" "$SUDOERS_DIR/autodeploy-dock"
+  check "rule file is 440"             [ "$(stat -c %a "$SUDOERS_DIR/autodeploy-dock")" = 440 ]
+  chmod 775 "$T/scripts/deploy.sh"
+  check "group-writable script refused" bash -c '! AUTODEPLOY_USER=$(id -un) "'"$B"'/allow-sudo.sh" dock >/dev/null 2>&1'
+  chmod 750 "$T/scripts/deploy.sh"; chmod 777 "$T/scripts"
+  check "writable folder refused"      bash -c '! AUTODEPLOY_USER=$(id -un) "'"$B"'/allow-sudo.sh" dock >/dev/null 2>&1'
+  chmod 755 "$T/scripts"
+  ln -s "$T/scripts/deploy.sh" "$T/scripts/link.sh"
+  sed -i "s|^DEPLOY_SCRIPT=.*|DEPLOY_SCRIPT='$T/scripts/link.sh'|" "$SP"
+  check "symlinked script refused"     bash -c '! AUTODEPLOY_USER=$(id -un) "'"$B"'/allow-sudo.sh" dock >/dev/null 2>&1'
+  check "node project refused"         bash -c '! AUTODEPLOY_USER=$(id -un) "'"$B"'/allow-sudo.sh" demo >/dev/null 2>&1'
+  "$B/autodeploy" remove dock >/dev/null 2>&1
+  check "remove disables sudo rule"    [ ! -e "$SUDOERS_DIR/autodeploy-dock" ]
+  unset SUDOERS_DIR
+else
+  echo "allow-sudo tests skipped (needs root)"
+fi
 
 echo "notification requests"
 mkdir -p "$T/curlstub"

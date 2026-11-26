@@ -11,7 +11,10 @@ Created by `autodeploy add`. Edit with `sudo -u deploy nano /opt/autodeploy/proj
 | `GIT_PROVIDER` | detected | `gitlab` or `github`. Detected from the URL (`github` if the host contains "github"); only changes the setup instructions `autodeploy add` prints. |
 | `REPO_URL` | (required) | SSH URL, e.g. `git@gitlab.com:group/app.git` or `git@github.com:me/app.git`. Self-hosted GitLab and GitHub Enterprise work too. |
 | `BRANCH` | `main` | The only branch whose pushes trigger a deploy. |
-| `APP_TYPE` | `node` | `node` = run with pm2. `static` = only build; serve `current/` with your web server. |
+| `APP_TYPE` | `node` | `node` = run with pm2. `static` = only build; serve `current/` with your web server. `script` = run your own deploy script ([guide](custom-script.md)). |
+| `DEPLOY_SCRIPT` | | `script` only: absolute path of the deploy script. |
+| `DEPLOY_AS_ROOT` | `no` | `script` only: `yes` runs it through `sudo -n` (set up with `sudo autodeploy allow-sudo <name>`). |
+| `ROLLBACK_SCRIPT` | | `script` only, optional: run by `autodeploy rollback <name>`. |
 | `INSTALL_CMD` | `auto` | `auto` picks `pnpm install --frozen-lockfile`, `yarn install`, `bun install`, `npm ci` or `npm install` from the lockfile. `none` skips the step. |
 | `BUILD_CMD` | `npm run build` | Runs inside the new release folder. `none` skips it. |
 | `START_CMD` | `npm start` | Command pm2 keeps running. `none` for static sites. |

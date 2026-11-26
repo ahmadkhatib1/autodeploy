@@ -75,7 +75,7 @@ autodeploy add
 | Repository URL | `git@gitlab.com:you/hisabyy.git` or `https://github.com/you/site` (https URLs are converted) |
 | Git provider | `gitlab` or `github` (detected from the URL) |
 | Branch | `main` |
-| App type | `node` (run with pm2) or `static` (files only) |
+| App type | `node` (run with pm2), `static` (files only) or `script` (your own deploy script, see below) |
 | Install command | `auto` (detects npm / pnpm / yarn / bun) |
 | Build command | `npm run build` |
 | Start command | `npm start` |
@@ -108,12 +108,27 @@ App secrets go in `/opt/autodeploy/apps/<project>/shared/.env` and are linked in
 
 Test it with a push, or with GitLab's **Webhooks → Test → Push events**. GitHub sends a *ping* when the webhook is created; n8n ignores it, and the next push deploys.
 
+## Option: your own deploy script (Docker Compose, migrations, backups)
+
+When a project needs more than install → build → restart, choose **App type `script`**. autodeploy keeps the webhook, checks, lock, logs and notifications, and runs your script instead of its own build. If needed it runs it as root through a sudo rule limited to that one file.
+
+```bash
+sudo autodeploy add          # App type: script, Deploy script: /opt/myapp/deploy/auto-deploy.sh
+autodeploy deploy myapp --dry-run
+```
+
+Your script is called with no arguments to deploy, or with `--dry-run` to print its plan. Exit 0 means deployed; anything else is reported as a failure with the script's output. The script handles its own rollback.
+
+Full guide, contract and security notes: [docs/custom-script.md](docs/custom-script.md). Template: [examples/deploy-script-template.sh](examples/deploy-script-template.sh).
+
 ## Commands
 
 ```bash
 autodeploy list                    # projects and their live release
 autodeploy deploy <project>        # deploy now
+autodeploy deploy <project> --dry-run   # script projects: show the plan only
 autodeploy rollback <project> [r]  # back to the previous (or a given) release
+sudo autodeploy allow-sudo <project>    # script projects: (re)create the sudo rule
 autodeploy logs <project>          # latest deploy log
 autodeploy remove <project>        # unregister (files are kept)
 autodeploy notify-setup            # choose / change notification channels
@@ -126,6 +141,7 @@ App output: `/opt/autodeploy/logs/<project>/app.out.log` and `app.err.log`, or `
 ## Documentation
 
 - [Configuration reference](docs/configuration.md): every per-project and server setting
+- [Custom deploy script](docs/custom-script.md): `APP_TYPE=script` for Docker Compose and other setups
 - [How it works & security](docs/how-it-works.md)
 - [Notifications setup](docs/notifications.md): Telegram, Gmail/SMTP, WhatsApp
 - [Changelog](CHANGELOG.md)

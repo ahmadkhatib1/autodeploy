@@ -1,6 +1,6 @@
 {
   "name": "@ahmadkhatib/autodeploy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Self-hosted auto-deploy from GitLab or GitHub to your own server with n8n: zero-downtime releases, automatic rollback, Telegram / email / WhatsApp notifications.",
   "keywords": [
     "deploy",
@@ -36,11 +36,12 @@
     "n8n/",
     "docs/",
     "README.ar.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "examples/"
   ],
   "scripts": {
     "test": "bash tests/run.sh",
-    "lint": "for f in install.sh bin/* lib/*.sh tests/*.sh; do bash -n \"$f\" || exit 1; done"
+    "lint": "for f in install.sh bin/* lib/*.sh tests/*.sh examples/*.sh; do bash -n \"$f\" || exit 1; done"
   },
   "engines": {
     "node": ">=18"

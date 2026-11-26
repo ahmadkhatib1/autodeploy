@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0 — 2026-11-26
+
+- **New app type `script`**: run your own deploy script (Docker Compose, migrations, backups,
+  multi-tenant…) while autodeploy keeps the webhook, checks, lock, logs and notifications.
+  - `DEPLOY_SCRIPT`, `DEPLOY_AS_ROOT`, `ROLLBACK_SCRIPT` settings.
+  - `autodeploy deploy <project> --dry-run` calls the script with `--dry-run`.
+  - Accurate ❌ messages: exit code plus the script's own output, with no "nothing changed" claim.
+  - No release folders are created for script projects.
+- **`autodeploy allow-sudo <project>`** (root): writes `/etc/sudoers.d/autodeploy-<project>`
+  allowing only `<script>` with no arguments or `--dry-run`, after checking the script and its
+  folders can only be changed by root. `sudo autodeploy add` does it automatically;
+  `autodeploy remove` disables it.
+- `autodeploy rollback` runs `ROLLBACK_SCRIPT` for script projects.
+- `examples/deploy-script-template.sh` and `docs/custom-script.md`.
+
 ## 1.1.0 — 2026-11-26
 
 - **GitHub support.** Each project chooses `gitlab` or `github` (`GIT_PROVIDER`, detected from the URL).

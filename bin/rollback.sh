@@ -18,6 +18,33 @@ valid_project_name "$NAME" || die "usage: rollback.sh <project> [release]"
 load_env_file "$CONFIG_DIR/notify.env" || true
 load_env_file "$PROJECTS_DIR/$NAME.env" || die "project '$NAME' not found"
 
+if [[ "${APP_TYPE:-node}" == "script" ]]; then
+  if [[ -z "${ROLLBACK_SCRIPT:-}" ]]; then
+    die "'$NAME' is deployed by its own script ($DEPLOY_SCRIPT), so autodeploy has no releases to switch.
+Roll back with your script, or 'git revert' and push. To make this command work, set ROLLBACK_SCRIPT in $PROJECTS_DIR/$NAME.env"
+  fi
+  [[ "$ROLLBACK_SCRIPT" =~ $SCRIPT_PATH_RE ]] || die "ROLLBACK_SCRIPT must be an absolute path"
+  build_script_cmd "$ROLLBACK_SCRIPT"
+  mkdir -p "$LOGS_DIR/$NAME" "$LOCKS_DIR"
+  exec 9>"$LOCKS_DIR/$NAME.lock"
+  flock -w 600 9 || die "a deploy of $NAME is running"
+  LOG_FILE="$LOGS_DIR/$NAME/$(date +%Y%m%d-%H%M%S)-rollback.log"
+  info "running: ${SCRIPT_RUN[*]}"
+  set +e
+  AUTODEPLOY_PROJECT="$NAME" "${SCRIPT_RUN[@]}" 2>&1 | tee "$LOG_FILE"
+  code=${PIPESTATUS[0]}
+  set -e
+  if (( code == 0 )); then
+    notify "↩️ رجوع يدوي في $NAME" "نفّذ سكربت الرجوع بنجاح."
+  else
+    notify "❌ فشل الرجوع في $NAME" "سكربت الرجوع انتهى بخطأ (exit $code).
+
+آخر سطور السجل:
+$(tail -n 25 "$LOG_FILE")"
+  fi
+  exit "$code"
+fi
+
 APP_DIR="$APPS_DIR/$NAME"
 CURRENT="$APP_DIR/current"
 START_CMD="${START_CMD-npm start}"
