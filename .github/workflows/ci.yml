@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: npm run lint
+      - name: ShellCheck
+        run: shellcheck -S error install.sh bin/*.sh bin/autodeploy lib/*.sh tests/*.sh
+      - name: End-to-end tests
+        run: npm test

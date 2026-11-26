@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# autodeploy — one command for everything.
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+LIB_DIR="${AUTODEPLOY_LIB:-$SCRIPT_DIR/../lib}"
+# shellcheck source=../lib/common.sh
+source "$LIB_DIR/common.sh"
+
+usage() {
+  cat <<EOF
+Usage: autodeploy <command> [args]
+
+  add                       Register a new project (interactive)
+  list                      Show projects and their live release
+  deploy <project>          Deploy now (even if nothing changed)
+  rollback <project> [rel]  Go back to the previous (or a given) release
+  logs <project>            Show the latest deploy log
+  remove <project>          Unregister a project (keeps its files)
+  notify-setup              Choose / change notification channels
+  notify-test               Send a test notification
+  info                      Show webhook base URL and paths
+EOF
+}
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+  add)           exec "$SCRIPT_DIR/add-project.sh" "$@" ;;
+  deploy)        exec "$SCRIPT_DIR/deploy.sh" "${1:-}" --force ;;
+  rollback)      exec "$SCRIPT_DIR/rollback.sh" "$@" ;;
+  notify-setup)  exec "$SCRIPT_DIR/notify-setup.sh" ;;
+  notify-test)   exec "$SCRIPT_DIR/notify-setup.sh" --test ;;
+  list)
+    shopt -s nullglob
+    printf '%-20s %-10s %-8s %s\n' PROJECT BRANCH PORT LIVE
+    for f in "$PROJECTS_DIR"/*.env; do
+      name="$(basename "$f" .env)"
+      ( BRANCH="" PORT=""
+        load_env_file "$f"
+        live="$(readlink "$APPS_DIR/$name/current" 2>/dev/null || true)"
+        printf '%-20s %-10s %-8s %s\n' "$name" "${BRANCH:-main}" "${PORT:--}" "${live##*/}" )
+    done
+    ;;
+  logs)
+    name="${1:-}"
+    valid_project_name "$name" || die "usage: autodeploy logs <project>"
+    latest="$(ls -1t "$LOGS_DIR/$name"/2*.log 2>/dev/null | head -n 1 || true)"
+    [[ -n "$latest" ]] || die "no deploy logs for $name yet"
+    echo "# $latest"
+    cat "$latest"
+    ;;
+  remove)
+    name="${1:-}"
+    valid_project_name "$name" || die "usage: autodeploy remove <project>"
+    [[ -f "$PROJECTS_DIR/$name.env" ]] || die "project '$name' not found"
+    if [[ $EUID -eq 0 ]]; then
+      exec sudo -u "$AUTODEPLOY_USER" -H env AUTODEPLOY_HOME="$AUTODEPLOY_HOME" "$0" remove "$name"
+    fi
+    pm2 delete "$name" >/dev/null 2>&1 && pm2 save >/dev/null 2>&1 || true
+    mkdir -p "$AUTODEPLOY_HOME/removed"
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    mv "$PROJECTS_DIR/$name.env" "$AUTODEPLOY_HOME/removed/$name.$stamp.env"
+    [[ -f "$KEYS_DIR/$name" ]] && mv "$KEYS_DIR/$name" "$AUTODEPLOY_HOME/removed/$name.$stamp.key"
+    [[ -f "$KEYS_DIR/$name.pub" ]] && mv "$KEYS_DIR/$name.pub" "$AUTODEPLOY_HOME/removed/$name.$stamp.key.pub"
+    info "removed '$name'. Its files stay in $APPS_DIR/$name — delete that folder yourself if you no longer need it."
+    info "Also delete the webhook and deploy key in GitLab."
+    ;;
+  info)
+    load_env_file "$CONFIG_DIR/server.env" || true
+    echo "Home:          $AUTODEPLOY_HOME"
+    echo "Webhook base:  ${WEBHOOK_BASE:-not set}"
+    echo "Projects:      $PROJECTS_DIR"
+    echo "Apps:          $APPS_DIR"
+    echo "Logs:          $LOGS_DIR"
+    ;;
+  ""|-h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

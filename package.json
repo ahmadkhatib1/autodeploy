@@ -1,0 +1,53 @@
+{
+  "name": "@ahmadkhatib/autodeploy",
+  "version": "1.0.0",
+  "description": "Self-hosted auto-deploy from GitLab to your own server with n8n: zero-downtime releases, automatic rollback, Telegram / email / WhatsApp notifications.",
+  "keywords": [
+    "deploy",
+    "auto-deploy",
+    "continuous-deployment",
+    "n8n",
+    "gitlab",
+    "webhook",
+    "pm2",
+    "nextjs",
+    "rollback",
+    "self-hosted"
+  ],
+  "homepage": "https://github.com/ahmadkhatib1/autodeploy#readme",
+  "bugs": {
+    "url": "https://github.com/ahmadkhatib1/autodeploy/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ahmadkhatib1/autodeploy.git"
+  },
+  "license": "MIT",
+  "author": "Ahmad Khatib",
+  "bin": {
+    "autodeploy": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "install.sh",
+    "bin/",
+    "lib/",
+    "n8n/",
+    "docs/",
+    "README.ar.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "bash tests/run.sh",
+    "lint": "for f in install.sh bin/* lib/*.sh tests/*.sh; do bash -n \"$f\" || exit 1; done"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

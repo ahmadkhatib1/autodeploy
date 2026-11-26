@@ -1,0 +1,147 @@
+{
+  "name": "Autodeploy — GitLab push → server",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "deploy",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "45123af8-1ee3-483b-8c92-68c833598b8c",
+      "name": "GitLab Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "7ce31c36-d11f-4d19-96c0-34d46138cbd7"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "57e98647-84b4-4e48-8854-79d1d4a234f6",
+              "leftValue": "={{ $json.headers['x-gitlab-event'] }}",
+              "rightValue": "Push Hook",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "d2ed5b88-f1dd-4bd4-9876-6fbf3c225abc",
+              "leftValue": "={{ $json.query.project }}",
+              "rightValue": "^[a-z0-9][a-z0-9-]{0,39}$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            },
+            {
+              "id": "f13789ab-a75b-431a-a33e-c96868c85724",
+              "leftValue": "={{ $json.headers['x-gitlab-token'] }}",
+              "rightValue": "^[A-Za-z0-9]{16,128}$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            },
+            {
+              "id": "d1dcd565-9fac-455a-9376-6e10b5618e54",
+              "leftValue": "={{ $json.body.ref }}",
+              "rightValue": "^refs/heads/[A-Za-z0-9._/-]{1,100}$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c1adddd5-658b-4cf7-84f9-3e8f07d76edc",
+      "name": "Valid GitLab push?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "={{ $('GitLab Webhook').item.json.query.project }} {{ $('GitLab Webhook').item.json.headers['x-gitlab-token'] }} {{ $('GitLab Webhook').item.json.body.ref }}",
+        "cwd": "/"
+      },
+      "id": "3bacf0f2-03d4-4600-a498-95948c10a833",
+      "name": "Run deploy on server",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        500,
+        -100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "8a81141b-8b7f-4bc7-8624-b0483789ebdb",
+      "name": "Ignored (not a valid push)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "GitLab Webhook": {
+      "main": [
+        [
+          {
+            "node": "Valid GitLab push?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid GitLab push?": {
+      "main": [
+        [
+          {
+            "node": "Run deploy on server",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignored (not a valid push)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
